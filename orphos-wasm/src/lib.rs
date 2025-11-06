@@ -1,4 +1,4 @@
-use orphos_core::config::{OutputFormat, OrphosConfig};
+use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
 use orphos_core::output::write_results;
 use serde::{Deserialize, Serialize};
@@ -85,10 +85,7 @@ fn parse_fasta_string(content: &str) -> Result<Vec<FastaRecord>, String> {
 }
 
 #[wasm_bindgen]
-pub fn analyze_sequence(
-    fasta_content: &str,
-    options_js: JsValue,
-) -> Result<OrphosResult, JsValue> {
+pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<OrphosResult, JsValue> {
     // Parse options from JavaScript
     let wasm_options: WasmOrphosOptions =
         serde_wasm_bindgen::from_value(options_js).unwrap_or_default();

@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_should_resolve_triple_overlap_false_wrong_strands() {
-        let nodes = vec![
+        let nodes = [
             create_test_node(100, Strand::Forward, CodonType::Atg, 50, false, [None; 3]),
             create_test_node(200, Strand::Reverse, CodonType::Stop, 150, false, [None; 3]),
         ];
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_should_resolve_triple_overlap_false_no_overlap_marker() {
-        let nodes = vec![
+        let nodes = [
             create_test_node(100, Strand::Forward, CodonType::Stop, 50, false, [None; 3]),
             create_test_node(200, Strand::Reverse, CodonType::Stop, 150, false, [None; 3]),
         ];

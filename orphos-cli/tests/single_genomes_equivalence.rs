@@ -1,8 +1,6 @@
 mod common;
 
-use crate::common::{
-    normalize_output, prodigal_available, run_original_prodigal, run_orphos,
-};
+use crate::common::{normalize_output, prodigal_available, run_original_prodigal, run_orphos};
 use insta::assert_snapshot;
 use sha2::{Digest, Sha256};
 use std::fs;

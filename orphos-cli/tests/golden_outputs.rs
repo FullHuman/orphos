@@ -16,7 +16,7 @@ fn cli_help_snapshot() {
     let text = String::from_utf8(output).unwrap();
 
     // Normalize binary name for cross-platform compatibility (remove .exe on Windows)
-    let normalized = text.replace("orphos-cli.exe", "orphos-cli");
+    let normalized = text.replace("orphos.exe", "orphos");
 
     assert_snapshot!("cli_help", normalized);
 }

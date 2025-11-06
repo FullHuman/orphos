@@ -254,6 +254,7 @@ fn update_motif_counts(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn build_coverage_map(
     real_motifs: &[[[f64; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES],
     good_motifs: &mut [[[i32; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES],

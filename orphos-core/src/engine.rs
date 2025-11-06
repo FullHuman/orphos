@@ -153,10 +153,7 @@ impl UntrainedOrphos {
                 .num_threads(num_threads)
                 .build_global()
                 .map_err(|e| {
-                    OrphosError::InvalidSequence(format!(
-                        "Failed to configure thread pool: {}",
-                        e
-                    ))
+                    OrphosError::InvalidSequence(format!("Failed to configure thread pool: {}", e))
                 })?;
         }
 
