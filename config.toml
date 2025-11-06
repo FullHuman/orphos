@@ -1,0 +1,7 @@
+[build]
+rustflags = [
+    "-C", "target-cpu=native",
+]
+
+[profile.release]
+split-debuginfo = "off"

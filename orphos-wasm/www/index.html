@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orphos - Gene Prediction</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧬 Orphos Gene Finder</h1>
+            <p>Prokaryotic gene prediction in your browser</p>
+        </header>
+
+        <main>
+            <section class="input-section">
+                <h2>Input Sequence</h2>
+                <div class="file-upload">
+                    <label for="fasta-file" class="file-label">
+                        <span class="file-button">Choose FASTA File</span>
+                        <span class="file-name" id="file-name">No file chosen</span>
+                    </label>
+                    <input type="file" id="fasta-file" accept=".fasta,.fa,.fna,.txt" />
+                </div>
+                
+                <div class="textarea-container">
+                    <label for="fasta-input">Or paste FASTA sequence:</label>
+                    <textarea id="fasta-input" rows="8" placeholder=">sequence_1
+ATGAAACGCATTAGCACCACCATTACCACCACCATCACCATTACCACAGGTAACGGTGCG
+GGCTGA"></textarea>
+                </div>
+            </section>
+
+            <section class="options-section">
+                <h2>Options</h2>
+                
+                <div class="option-group">
+                    <label for="mode">Analysis Mode:</label>
+                    <select id="mode">
+                        <option value="single">Single Genome</option>
+                        <option value="meta">Metagenomic</option>
+                    </select>
+                    <span class="help-text">Use 'meta' for short, fragmented sequences</span>
+                </div>
+
+                <div class="option-group">
+                    <label for="format">Output Format:</label>
+                    <select id="format">
+                        <option value="gbk">GenBank (gbk)</option>
+                        <option value="gff">GFF3</option>
+                        <option value="sco">Simple Coordinates (sco)</option>
+                        <option value="gca">Gene Coordinate Annotation (gca)</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label for="translation-table">Translation Table:</label>
+                    <select id="translation-table">
+                        <option value="">Auto (default)</option>
+                        <option value="1">1 - Standard</option>
+                        <option value="2">2 - Vertebrate Mitochondrial</option>
+                        <option value="3">3 - Yeast Mitochondrial</option>
+                        <option value="4">4 - Mold/Protozoan Mitochondrial</option>
+                        <option value="5">5 - Invertebrate Mitochondrial</option>
+                        <option value="6">6 - Ciliate/Dasycladacean</option>
+                        <option value="9">9 - Echinoderm/Flatworm Mitochondrial</option>
+                        <option value="10">10 - Euplotid Nuclear</option>
+                        <option value="11">11 - Bacterial/Archaeal</option>
+                        <option value="12">12 - Alternative Yeast Nuclear</option>
+                        <option value="13">13 - Ascidian Mitochondrial</option>
+                        <option value="14">14 - Alternative Flatworm Mitochondrial</option>
+                        <option value="15">15 - Blepharisma Nuclear</option>
+                        <option value="16">16 - Chlorophycean Mitochondrial</option>
+                        <option value="21">21 - Trematode Mitochondrial</option>
+                        <option value="22">22 - Scenedesmus Obliquus Mitochondrial</option>
+                        <option value="23">23 - Thraustochytrium Mitochondrial</option>
+                        <option value="24">24 - Pterobranchia Mitochondrial</option>
+                        <option value="25">25 - Candidate Division SR1</option>
+                    </select>
+                </div>
+
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" id="closed-ends">
+                        <span>Closed ends (no genes off edges)</span>
+                    </label>
+                </div>
+
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" id="mask-n-runs">
+                        <span>Mask runs of N's</span>
+                    </label>
+                </div>
+
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" id="force-non-sd">
+                        <span>Force non-Shine-Dalgarno models</span>
+                    </label>
+                </div>
+
+                <button id="analyze-btn" class="analyze-btn">Analyze Sequence</button>
+            </section>
+
+            <section class="results-section" id="results-section" style="display: none;">
+                <h2>Results</h2>
+                <div class="stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Sequences:</span>
+                        <span class="stat-value" id="sequence-count">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Genes Found:</span>
+                        <span class="stat-value" id="gene-count">0</span>
+                    </div>
+                </div>
+                
+                <div class="output-controls">
+                    <button id="download-btn" class="download-btn">Download Results</button>
+                    <button id="copy-btn" class="copy-btn">Copy to Clipboard</button>
+                </div>
+                
+                <div class="output-container">
+                    <pre id="output"><code></code></pre>
+                </div>
+            </section>
+
+            <section class="error-section" id="error-section" style="display: none;">
+                <h3>⚠️ Error</h3>
+                <p id="error-message"></p>
+            </section>
+
+            <div class="loading" id="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Analyzing sequences...</p>
+            </div>
+        </main>
+
+        <footer>
+            <p>Orphos: Prokaryotic Dynamic Programming Genefinding Algorithm</p>
+            <p>Running locally in your browser using WebAssembly</p>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

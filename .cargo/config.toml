@@ -1,0 +1,48 @@
+[alias]
+# Fast coverage - excludes performance tests for quick feedback
+cov-fast = [
+    "tarpaulin", 
+    "--skip-clean", 
+    "--out", "Xml", "Html",
+    "--output-dir", "coverage",
+    "--exclude-files", "orphos-cli/tests/single_genomes_equivalence.rs", "orphos-cli/tests/common/mod.rs", "orphos-core/src/metagenomic/presets.rs",
+    "--timeout", "60",
+    "--",
+    "--skip", "single_genome_fixtures_equivalence_summary",
+]
+
+# HTML coverage report only (good for local development)
+cov-html = [
+    "tarpaulin",
+    "--out", "Html",
+    "--output-dir", "coverage",
+    "--exclude-files", "orphos-cli/tests/single_genomes_equivalence.rs", "orphos-cli/tests/common/mod.rs", "orphos-core/src/metagenomic/presets.rs",
+    "--",
+    "--skip", "single_genome_fixtures_equivalence_summary",
+]
+
+# CI-friendly coverage (XML only, fastest)
+cov-ci = [
+    "tarpaulin",
+    "--skip-clean",
+    "--out", "Xml",
+    "--output-dir", "coverage",
+    "--exclude-files", "orphos-cli/tests/single_genomes_equivalence.rs", "orphos-cli/tests/common/mod.rs", "orphos-core/src/metagenomic/presets.rs",
+    "--timeout", "360"
+]
+
+# Quick coverage summary (no files, just stats)
+cov-summary = [
+    "tarpaulin",
+    "--skip-clean",
+    "--exclude-files", "orphos-cli/tests/single_genomes_equivalence.rs", "orphos-cli/tests/common/mod.rs", "orphos-core/src/metagenomic/presets.rs",
+    "--timeout", "30",
+    "--",
+    "--skip", "single_genome_fixtures_equivalence_summary",
+]
+
+# Clean coverage artifacts
+cov-clean = ["clean"]
+
+# Open coverage report in browser (macOS)
+cov-open = ["sh", "-c", "open coverage/tarpaulin-report.html"]

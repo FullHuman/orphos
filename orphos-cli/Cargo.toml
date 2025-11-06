@@ -1,0 +1,44 @@
+[package]
+name = "orphos-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Command-line interface for Orphos, a tool for finding protein-coding genes in microbial genomes."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/FullHuman/orphos"
+documentation = "https://docs.rs/orphos-cli"
+readme = "README.md"
+categories = ["bioinformatics", "genomics", "computational biology"]
+keywords = [
+    "orphos",
+    "gene prediction",
+    "bioinformatics",
+    "genomics",
+    "microbial genomes",
+    "prodigal"
+]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+clap = { version = "4.5.41", features = ["derive"] }
+orphos-core = { path = "../orphos-core" }
+
+[dev-dependencies]
+tempfile = "3.8"
+assert_cmd = "2.0"
+predicates = "3.0"
+similar = "2.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+insta = { version = "1.39", features = ["glob"] }
+sha2 = "0.10"
+
+[[bin]]
+name = "orphos"
+path = "src/main.rs"
+
+[[bench]]
+name = "prodigal_benchmarks"
+harness = false

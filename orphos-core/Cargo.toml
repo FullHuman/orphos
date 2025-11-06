@@ -1,0 +1,30 @@
+[package]
+name = "orphos-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core library for Orphos, a tool for finding protein-coding genes in microbial genomes."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/FullHuman/orphos"
+documentation = "https://docs.rs/orphos-core"
+readme = "README.md"
+categories = ["bioinformatics", "genomics", "computational biology"]
+keywords = [
+    "orphos",
+    "gene prediction",
+    "bioinformatics",
+    "genomics",
+    "microbial genomes",
+    "prodigal"
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+bio = "2.3.0"
+rayon = "1.10.0"
+thiserror = "2.0.12"
+wide = "0.7.33"
+
+[dev-dependencies]

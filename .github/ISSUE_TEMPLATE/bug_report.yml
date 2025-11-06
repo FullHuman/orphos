@@ -1,0 +1,119 @@
+name: Bug Report
+description: Create a report to help us improve Orphos
+title: "[Bug]: "
+labels: ["bug", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report! Please provide as much detail as possible to help us understand and reproduce the issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: Orphos Version
+      description: What version of Orphos are you using?
+      placeholder: "e.g., 0.1.0, main branch commit hash"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What operating system are you using?
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other (please specify in description)
+    validations:
+      required: true
+
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust Version
+      description: What version of Rust are you using? (run `rustc --version`)
+      placeholder: "e.g., rustc 1.89.0 (e9ee192d2 2024-07-19)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: "Describe what happened and what you expected to happen..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Run command '...'
+        2. With input file '...'
+        3. See error
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual Behavior
+      description: A clear and concise description of what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error Output
+      description: If applicable, paste any error messages or logs
+      render: shell
+      placeholder: "Paste error output here..."
+
+  - type: textarea
+    id: input-files
+    attributes:
+      label: Sample Input Files
+      description: |
+        If possible, provide a minimal sample input file that reproduces the issue.
+        For large files, please provide a minimal example or the first few sequences.
+      render: text
+      placeholder: "Paste sample FASTA content or describe the input..."
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here (screenshots, related issues, etc.)
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to ensure this bug hasn't been reported before
+          required: true
+        - label: I have tested with the latest version of Orphos
+          required: true
+        - label: I have provided all the requested information above
+          required: true

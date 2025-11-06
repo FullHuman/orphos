@@ -1,0 +1,87 @@
+name: Publish to crates.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: 'Crate to publish (orphos-core, orphos-cli, or all)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - orphos-core
+          - orphos-cli
+          - all
+      dry_run:
+        description: 'Perform a dry run (no actual publishing)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish-crates:
+    name: Publish Rust Crates
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Verify versions match
+      run: |
+        CORE_VERSION=$(grep '^version = ' orphos-core/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        CLI_VERSION=$(grep '^version = ' orphos-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        echo "orphos-core version: $CORE_VERSION"
+        echo "orphos-cli version: $CLI_VERSION"
+
+    - name: Run tests
+      run: cargo test --all
+
+    - name: Publish orphos-core
+      if: inputs.crate == 'orphos-core' || inputs.crate == 'all'
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        cd orphos-core
+        if [ "${{ inputs.dry_run }}" = "true" ]; then
+          cargo publish --dry-run
+        else
+          cargo publish
+        fi
+
+    - name: Wait for orphos-core to be available
+      if: (inputs.crate == 'all') && (inputs.dry_run == false)
+      run: |
+        echo "Waiting 30 seconds for orphos-core to be available on crates.io..."
+        sleep 30
+
+    - name: Publish orphos-cli
+      if: inputs.crate == 'orphos-cli' || inputs.crate == 'all'
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        cd orphos-cli
+        if [ "${{ inputs.dry_run }}" = "true" ]; then
+          cargo publish --dry-run
+        else
+          cargo publish
+        fi
+
+    - name: Create summary
+      run: |
+        echo "### Published Crates" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ inputs.crate }}" = "all" ] || [ "${{ inputs.crate }}" = "orphos-core" ]; then
+          echo "- ✅ orphos-core" >> $GITHUB_STEP_SUMMARY
+        fi
+        if [ "${{ inputs.crate }}" = "all" ] || [ "${{ inputs.crate }}" = "orphos-cli" ]; then
+          echo "- ✅ orphos-cli" >> $GITHUB_STEP_SUMMARY
+        fi
+        if [ "${{ inputs.dry_run }}" = "true" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** This was a dry run. No packages were actually published." >> $GITHUB_STEP_SUMMARY
+        fi

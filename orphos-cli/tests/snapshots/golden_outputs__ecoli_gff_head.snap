@@ -1,0 +1,29 @@
+---
+source: orphos-cli/tests/golden_outputs.rs
+expression: head
+---
+##gff-version  3
+# Sequence Data: seqnum=1;seqlen=4641652;seqhdr="NC_000913.3:1-4641652 Escherichia coli str. K-12 substr. MG1655, complete genome"
+# Model Data: version=Orphos.v1.0.0;run_type=Single;model="Ab initio";gc_cont=50.79;transl_table=11;uses_sd=1
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	3	98	1.2	+	0	ID=1_1;partial=10;start_type=Edge;rbs_motif=None;rbs_spacer=None;gc_cont=0.427;conf=56.57;score=1.15;cscore=-1.57;sscore=2.72;rscore=0.00;uscore=0.00;tscore=3.22;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	337	2799	336.9	+	0	ID=1_2;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.531;conf=99.99;score=336.87;cscore=320.95;sscore=15.93;rscore=11.24;uscore=1.40;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	2801	3733	118.1	+	0	ID=1_3;partial=00;start_type=ATG;rbs_motif=AGGAG;rbs_spacer=5-10bp;gc_cont=0.563;conf=100.00;score=118.08;cscore=97.71;sscore=20.37;rscore=14.85;uscore=0.32;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	3734	5020	194.3	+	0	ID=1_4;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.528;conf=99.99;score=194.29;cscore=189.96;sscore=4.33;rscore=2.99;uscore=-3.88;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	5234	5530	8.2	+	0	ID=1_5;partial=00;start_type=GTG;rbs_motif=AGGAG;rbs_spacer=5-10bp;gc_cont=0.539;conf=86.81;score=8.20;cscore=0.54;sscore=7.65;rscore=14.85;uscore=-0.06;tscore=-6.49;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	5683	6459	117.7	-	0	ID=1_6;partial=00;start_type=ATG;rbs_motif=AGGA;rbs_spacer=5-10bp;gc_cont=0.495;conf=100.00;score=117.71;cscore=100.93;sscore=16.79;rscore=11.00;uscore=1.85;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	6529	7959	136.7	-	0	ID=1_7;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.534;conf=100.00;score=136.72;cscore=123.76;sscore=12.96;rscore=11.24;uscore=-1.56;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	8238	9191	170.0	+	0	ID=1_8;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.520;conf=100.00;score=170.01;cscore=160.73;sscore=9.28;rscore=2.99;uscore=2.35;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	9306	9893	74.6	+	0	ID=1_9;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.544;conf=100.00;score=74.60;cscore=64.43;sscore=10.17;rscore=2.99;uscore=3.24;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	9928	10494	102.2	-	0	ID=1_10;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.529;conf=100.00;score=102.17;cscore=92.74;sscore=9.43;rscore=2.99;uscore=2.50;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	10643	11356	78.4	-	0	ID=1_11;partial=00;start_type=ATG;rbs_motif=AGxAG;rbs_spacer=5-10bp;gc_cont=0.507;conf=100.00;score=78.39;cscore=75.74;sscore=2.65;rscore=-3.07;uscore=0.78;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	11382	11786	41.1	-	0	ID=1_12;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.486;conf=99.99;score=41.07;cscore=33.58;sscore=7.49;rscore=2.99;uscore=1.21;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	12163	14079	348.3	+	0	ID=1_13;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.511;conf=99.99;score=348.26;cscore=331.26;sscore=17.00;rscore=11.24;uscore=1.83;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	14168	15298	144.7	+	0	ID=1_14;partial=00;start_type=ATG;rbs_motif=3Base/5BMM;rbs_spacer=13-15bp;gc_cont=0.552;conf=100.00;score=144.65;cscore=148.63;sscore=-3.97;rscore=-6.04;uscore=-1.87;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	15445	16557	36.5	+	0	ID=1_15;partial=00;start_type=ATG;rbs_motif=None;rbs_spacer=None;gc_cont=0.519;conf=99.98;score=36.54;cscore=40.77;sscore=-4.23;rscore=-8.29;uscore=0.12;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	16580	16720	4.9	+	0	ID=1_16;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.511;conf=75.67;score=4.94;cscore=-4.26;sscore=9.20;rscore=6.20;uscore=0.29;tscore=2.17;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	16751	16903	12.7	-	0	ID=1_17;partial=00;start_type=ATG;rbs_motif=AGGAG;rbs_spacer=5-10bp;gc_cont=0.529;conf=94.84;score=12.66;cscore=2.43;sscore=10.23;rscore=8.91;uscore=-0.39;tscore=2.36;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	17489	18655	132.2	+	0	ID=1_18;partial=00;start_type=GTG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.514;conf=100.00;score=132.19;cscore=133.00;sscore=-0.80;rscore=2.99;uscore=2.69;tscore=-6.49;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	18721	19620	105.6	+	0	ID=1_19;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.474;conf=100.00;score=105.64;cscore=89.80;sscore=15.84;rscore=11.24;uscore=0.67;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	19811	20188	6.3	-	0	ID=1_20;partial=00;start_type=ATG;rbs_motif=None;rbs_spacer=None;gc_cont=0.537;conf=80.99;score=6.30;cscore=12.77;sscore=-6.46;rscore=-8.29;uscore=-2.90;tscore=3.94;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	20233	20508	4.2	-	0	ID=1_21;partial=00;start_type=GTG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.525;conf=72.28;score=4.17;cscore=-0.39;sscore=4.56;rscore=11.24;uscore=0.96;tscore=-6.49;
+NC_000913.3:1-4641652	Orphos_v1.0.0	CDS	20815	21078	18.7	-	0	ID=1_22;partial=00;start_type=TTG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.470;conf=98.66;score=18.70;cscore=18.88;sscore=-0.19;rscore=11.24;uscore=2.04;tscore=-12.81;

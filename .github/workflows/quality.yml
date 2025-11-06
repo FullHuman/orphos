@@ -1,0 +1,78 @@
+name: Quality Checks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  check-formatting:
+    name: Check Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+  check-dependencies:
+    name: Check Dependencies
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Install cargo-outdated
+      run: cargo install cargo-outdated
+    - name: Check for outdated dependencies
+      run: cargo outdated --exit-code 1
+      continue-on-error: true # Don't fail the build, just warn
+
+  check-unused-dependencies:
+    name: Check Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@nightly
+    - name: Install cargo-udeps
+      run: cargo install cargo-udeps --locked
+    - name: Check for unused dependencies
+      run: cargo +nightly udeps --all-targets
+
+  check-license:
+    name: Check License Headers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check license headers
+      run: |
+        # Check that all Rust files have license headers
+        missing_license=()
+        while IFS= read -r -d '' file; do
+          if ! head -10 "$file" | grep -q "GPL-3.0"; then
+            missing_license+=("$file")
+          fi
+        done < <(find . -name "*.rs" -not -path "./target/*" -print0)
+        
+        if [ ${#missing_license[@]} -gt 0 ]; then
+          echo "Files missing license headers:"
+          printf '%s\n' "${missing_license[@]}"
+          exit 1
+        fi
+      continue-on-error: true # Don't fail for now, just warn
+
+  check-docs:
+    name: Check Documentation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Check documentation
+      run: cargo doc --all --no-deps --document-private-items
+    - name: Check for missing docs
+      run: |
+        # Check that public APIs are documented
+        cargo rustdoc -- -D missing_docs -D rustdoc::broken_intra_doc_links
+      continue-on-error: true # Don't fail for now, just warn

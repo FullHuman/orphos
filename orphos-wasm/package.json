@@ -1,0 +1,21 @@
+{
+  "name": "@fullhuman/orphos",
+  "version": "0.1.0",
+  "description": "WebAssembly web interface for Orphos gene finder",
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir www/pkg",
+    "build:release": "wasm-pack build --target web --release --out-dir www/pkg",
+    "serve": "python3 -m http.server 8080 --directory www",
+    "start": "npm run build && npm run serve",
+    "clean": "rm -rf www/pkg target"
+  },
+  "keywords": [
+    "webassembly",
+    "bioinformatics",
+    "gene-prediction",
+    "orphos"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {}
+}

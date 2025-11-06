@@ -1,0 +1,31 @@
+[workspace]
+members = ["orphos-core", "orphos-cli", "orphos-wasm"]
+exclude = ["orphos-python"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.release-debug]
+inherits = "release"
+debug = true
+debug-assertions = false
+overflow-checks = false
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[profile.test]
+opt-level = 3
+
+# Coverage profile for faster tarpaulin runs
+[profile.coverage]
+inherits = "test"
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = false

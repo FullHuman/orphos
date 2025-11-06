@@ -1,0 +1,210 @@
+name: Code Coverage (Native)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: 1.88.0
+        override: true
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        cargo install cargo-tarpaulin
+
+    - name: Run coverage analysis
+      run: |
+        cargo tarpaulin --skip-clean --out Html Xml Json --output-dir coverage \
+          --exclude-files 'orphos-cli/tests/performance_tests.rs' \
+          'orphos-cli/tests/performance_regression_tests.rs' \
+          --timeout 60 -- --skip test_detailed_performance_comparison \
+          --skip test_performance_regression
+
+    - name: Parse coverage summary
+      id: coverage
+      run: |
+        # Install jq if not available (backup)
+        command -v jq >/dev/null 2>&1 || { echo "Installing jq..."; sudo apt-get install -y jq; }
+        
+        # Extract coverage percentage from Cobertura XML output (more reliable than JSON)
+        if [ -f coverage/cobertura.xml ]; then
+          # Extract line-rate from cobertura.xml and convert to percentage
+          COVERAGE=$(grep -o 'line-rate="[0-9.]*"' coverage/cobertura.xml | head -1 | grep -o '[0-9.]*' | awk '{printf "%.2f", $1 * 100}')
+          
+          if [ -z "$COVERAGE" ]; then
+            echo "Warning: Could not parse coverage from cobertura.xml, setting to 0"
+            COVERAGE="0.00"
+          fi
+        else
+          echo "Warning: cobertura.xml not found, setting coverage to 0"
+          COVERAGE="0.00"
+        fi
+        
+        echo "percentage=${COVERAGE}" >> $GITHUB_OUTPUT
+        
+        # Create a simple coverage badge color
+        COLOR=$(awk -v cov="$COVERAGE" 'BEGIN {
+          if (cov >= 80) print "brightgreen"
+          else if (cov >= 60) print "yellow" 
+          else print "red"
+        }')
+        echo "color=${COLOR}" >> $GITHUB_OUTPUT
+        
+        # Generate coverage summary
+        echo "## 📊 Code Coverage Report" > coverage_summary.md
+        echo "" >> coverage_summary.md
+        echo "**Overall Coverage: ${COVERAGE}%**" >> coverage_summary.md
+        echo "" >> coverage_summary.md
+        
+        # Extract lines covered and total from cobertura.xml
+        if [ -f coverage/cobertura.xml ]; then
+          LINES_COVERED=$(grep -o 'lines-covered="[0-9]*"' coverage/cobertura.xml | head -1 | grep -o '[0-9]*')
+          LINES_TOTAL=$(grep -o 'lines-valid="[0-9]*"' coverage/cobertura.xml | head -1 | grep -o '[0-9]*')
+          
+          echo "📊 **Coverage Summary:**" >> coverage_summary.md
+          echo "- **Lines covered:** ${LINES_COVERED:-N/A}" >> coverage_summary.md
+          echo "- **Total lines:** ${LINES_TOTAL:-N/A}" >> coverage_summary.md
+        else
+          echo "### No coverage data available" >> coverage_summary.md
+        fi
+        
+        echo "" >> coverage_summary.md
+
+    - name: Upload coverage artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report-${{ github.run_number }}
+        path: |
+          coverage/
+          coverage_summary.md
+        retention-days: 30
+
+    - name: Comment PR with coverage
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const coverage = '${{ steps.coverage.outputs.percentage }}';
+          const color = '${{ steps.coverage.outputs.color }}';
+          
+          // Read the coverage summary
+          let summary = '';
+          try {
+            summary = fs.readFileSync('coverage_summary.md', 'utf8');
+          } catch (error) {
+            console.log('Could not read coverage_summary.md:', error.message);
+            summary = `## 📊 Code Coverage Report\n\n**Overall Coverage: ${coverage}%**`;
+          }
+          
+          const artifactUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
+          const body = `${summary}
+          
+          ---
+          *Coverage report generated by tarpaulin*
+          *📁 [View detailed HTML report in artifacts](${artifactUrl})*`;
+
+          // Find existing coverage comment
+          try {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const existingComment = comments.data.find(comment => 
+              comment.body.includes('📊 Code Coverage Report')
+            );
+            
+            if (existingComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body
+              });
+              console.log('Updated existing coverage comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+              console.log('Created new coverage comment');
+            }
+          } catch (error) {
+            console.error('Error posting coverage comment:', error);
+          }
+
+    - name: Generate coverage badge
+      if: github.ref == 'refs/heads/main'
+      run: |
+        COVERAGE=${{ steps.coverage.outputs.percentage }}
+        COLOR=${{ steps.coverage.outputs.color }}
+        
+        # Ensure coverage directory exists
+        mkdir -p coverage
+        
+        # Create a simple SVG badge using a simpler approach
+        echo "Creating coverage badge with ${COVERAGE}% coverage (${COLOR})"
+        
+        # Generate badge content
+        cat > coverage/badge.svg << EOF
+        <svg xmlns="http://www.w3.org/2000/svg" width="104" height="20">
+          <g>
+            <rect width="63" height="20" fill="#555"/>
+            <rect x="63" width="41" height="20" fill="${COLOR}"/>
+          </g>
+          <g fill="#fff" text-anchor="middle" font-family="Arial" font-size="11">
+            <text x="31.5" y="14">coverage</text>
+            <text x="83.5" y="14">${COVERAGE}%</text>
+          </g>
+        </svg>
+        EOF
+        
+        echo "✅ Generated coverage badge: ${COVERAGE}% (${COLOR})"
+
+    - name: Upload badge to release
+      if: github.ref == 'refs/heads/main'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-badge
+        path: coverage/badge.svg

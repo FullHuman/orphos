@@ -1,0 +1,121 @@
+name: Feature Request
+description: Suggest an idea or enhancement for Orphos
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please provide detailed information to help us understand your request.
+
+  - type: dropdown
+    id: feature-type
+    attributes:
+      label: Feature Type
+      description: What type of feature are you requesting?
+      options:
+        - New algorithm or analysis method
+        - Performance improvement
+        - New output format
+        - CLI interface enhancement
+        - API enhancement
+        - Documentation improvement
+        - Developer tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem-description
+    attributes:
+      label: Problem Description
+      description: Is your feature request related to a problem? Please describe.
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like to see
+      placeholder: "I would like Orphos to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Describe your specific use case and how this feature would help
+      placeholder: "In my research/workflow, I need to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or features you've considered
+      placeholder: "I considered using... but it doesn't work because..."
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples
+      description: |
+        Provide examples of how this feature would be used:
+        - Command-line examples
+        - Input/output examples
+        - API usage examples
+      render: shell
+      placeholder: |
+        # Example command
+        orphos-cli --new-feature input.fasta
+        
+        # Expected output
+        ...
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Low (nice to have)
+        - Medium (would be helpful)
+        - High (important for my work)
+        - Critical (blocking my work)
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-ideas
+    attributes:
+      label: Implementation Ideas
+      description: |
+        If you have ideas about how this could be implemented, please share them.
+        This is optional but can be very helpful!
+      placeholder: "This could potentially be implemented by..."
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: |
+        Add any other context, screenshots, research papers, or examples about the feature request here.
+        Links to similar features in other tools are also helpful.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to ensure this feature hasn't been requested before
+          required: true
+        - label: I have checked the documentation to ensure this feature doesn't already exist
+          required: true
+        - label: I understand this is a voluntary open-source project and features are implemented as time allows
+          required: true

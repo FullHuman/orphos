@@ -1,0 +1,9 @@
+/target
+/www/pkg
+**/*.rs.bk
+Cargo.lock
+node_modules/
+*.wasm
+*.js
+!www/app.js
+.DS_Store

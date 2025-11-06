@@ -1,0 +1,165 @@
+name: Pre-Release Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to validate (e.g., 0.1.0)'
+        required: true
+
+jobs:
+  validate-versions:
+    name: Validate Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check version consistency
+      run: |
+        VERSION="${{ inputs.version }}"
+        echo "Checking for version $VERSION in all package files..."
+        
+        ERRORS=0
+        
+        # Check orphos-core
+        CORE_VERSION=$(grep '^version = ' orphos-core/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ "$CORE_VERSION" != "$VERSION" ]; then
+          echo "❌ orphos-core/Cargo.toml has version $CORE_VERSION (expected $VERSION)"
+          ERRORS=$((ERRORS + 1))
+        else
+          echo "✅ orphos-core/Cargo.toml: $CORE_VERSION"
+        fi
+        
+        # Check orphos-cli
+        CLI_VERSION=$(grep '^version = ' orphos-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ "$CLI_VERSION" != "$VERSION" ]; then
+          echo "❌ orphos-cli/Cargo.toml has version $CLI_VERSION (expected $VERSION)"
+          ERRORS=$((ERRORS + 1))
+        else
+          echo "✅ orphos-cli/Cargo.toml: $CLI_VERSION"
+        fi
+        
+        # Check orphos-wasm
+        WASM_VERSION=$(grep '^version = ' orphos-wasm/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ "$WASM_VERSION" != "$VERSION" ]; then
+          echo "❌ orphos-wasm/Cargo.toml has version $WASM_VERSION (expected $VERSION)"
+          ERRORS=$((ERRORS + 1))
+        else
+          echo "✅ orphos-wasm/Cargo.toml: $WASM_VERSION"
+        fi
+        
+        # Check Python package
+        PYTHON_VERSION=$(grep '^version = ' orphos-python/pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ "$PYTHON_VERSION" != "$VERSION" ]; then
+          echo "❌ orphos-python/pyproject.toml has version $PYTHON_VERSION (expected $VERSION)"
+          ERRORS=$((ERRORS + 1))
+        else
+          echo "✅ orphos-python/pyproject.toml: $PYTHON_VERSION"
+        fi
+        
+        # Check npm package
+        NPM_VERSION=$(grep '"version"' orphos-wasm/package.json | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ "$NPM_VERSION" != "$VERSION" ]; then
+          echo "❌ orphos-wasm/package.json has version $NPM_VERSION (expected $VERSION)"
+          ERRORS=$((ERRORS + 1))
+        else
+          echo "✅ orphos-wasm/package.json: $NPM_VERSION"
+        fi
+        
+        echo ""
+        if [ $ERRORS -eq 0 ]; then
+          echo "✅ All versions are consistent!"
+        else
+          echo "❌ Found $ERRORS version mismatches"
+          exit 1
+        fi
+
+  test-builds:
+    name: Test Builds
+    needs: validate-versions
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Run tests
+      run: cargo test --all
+
+    - name: Build CLI release
+      run: cargo build --release -p orphos-cli
+
+    - name: Build WASM
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        cd orphos-wasm
+        wasm-pack build --target web --release
+
+  test-python-build:
+    name: Test Python Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build Python package
+      working-directory: orphos-python
+      run: maturin build --release
+
+    - name: List built wheels
+      run: ls -lh orphos-python/target/wheels/
+
+  check-changelog:
+    name: Check CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check for version in CHANGELOG
+      run: |
+        VERSION="${{ inputs.version }}"
+        if grep -q "## \[$VERSION\]" CHANGELOG.md || grep -q "## $VERSION" CHANGELOG.md; then
+          echo "✅ Version $VERSION found in CHANGELOG.md"
+        else
+          echo "⚠️  Warning: Version $VERSION not found in CHANGELOG.md"
+          echo "Please update CHANGELOG.md before releasing"
+        fi
+
+  summary:
+    name: Validation Summary
+    needs: [validate-versions, test-builds, test-python-build, check-changelog]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create summary
+      run: |
+        echo "# Pre-Release Validation Complete ✅" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Version ${{ inputs.version }} is ready for release!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "1. Create and push tag: \`git tag -a v${{ inputs.version }} -m 'Release v${{ inputs.version }}' && git push origin v${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "2. Wait for release workflow to complete" >> $GITHUB_STEP_SUMMARY
+        echo "3. Publish the draft GitHub release" >> $GITHUB_STEP_SUMMARY
+        echo "4. Run package publishing workflows (crates.io, PyPI, npm)" >> $GITHUB_STEP_SUMMARY
+        echo "5. Update Homebrew formula" >> $GITHUB_STEP_SUMMARY
+        echo "6. Submit to Bioconda" >> $GITHUB_STEP_SUMMARY

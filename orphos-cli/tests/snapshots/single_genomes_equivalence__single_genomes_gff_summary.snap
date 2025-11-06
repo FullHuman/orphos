@@ -1,0 +1,18 @@
+---
+source: orphos-cli/tests/single_genomes_equivalence.rs
+expression: summary
+---
+file	similarity(%)	coord_match(%)	exact	orig_hash	rust_hash
+NC_000913.3.fasta	100.000	100.000	yes	ffa413cfc36d	ffa413cfc36d
+NC_000915.1.fasta	87.737	100.000	no	489e50c2fb63	63a81b8d482c
+NC_000962.3.fasta	12.451	99.951	no	2731c890f8b6	101555659b9a
+NC_000964.3.fasta	100.000	100.000	yes	768463242dfd	768463242dfd
+NC_001318.1.fasta	79.589	100.000	no	a348daaf1f7b	2e4433a14d35
+NC_002516.2.fasta	100.000	100.000	yes	0700d5538e7c	0700d5538e7c
+NC_002528.1.fasta	100.000	100.000	yes	a1b53909126f	a1b53909126f
+NC_002745.2.fasta	100.000	100.000	yes	f27f0f8f7b0a	f27f0f8f7b0a
+NC_003888.3.fasta	100.000	100.000	yes	b4512d31fd35	b4512d31fd35
+NC_005072.1.fasta	100.000	100.000	yes	729ff27609d5	729ff27609d5
+NC_008512.1.fasta	100.000	100.000	yes	02a0a435eb32	02a0a435eb32
+fragment.fasta	6.857	100.000	no	db6ea1405d8f	9fb4680ca61e
+fragment2.fasta	100.000	100.000	yes	826b4ee35f74	826b4ee35f74
