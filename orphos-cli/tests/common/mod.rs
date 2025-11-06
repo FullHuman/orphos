@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::process;
 
 use assert_cmd::Command;

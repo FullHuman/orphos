@@ -50,7 +50,7 @@
 //! ```
 
 use clap::{Arg, Command};
-use orphos_core::config::{OutputFormat, OrphosConfig};
+use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::output::write_results;
 use orphos_core::*;
 use std::fs::File;
