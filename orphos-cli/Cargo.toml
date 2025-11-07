@@ -20,7 +20,7 @@ all-features = true
 
 [dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
-orphos-core = { path = "../orphos-core" }
+orphos-core = { version = "0.1.0", path = "../orphos-core" }
 
 [dev-dependencies]
 tempfile = "3.8"
