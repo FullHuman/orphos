@@ -7,7 +7,7 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/FullHuman/orphos"
 documentation = "https://docs.rs/orphos-cli"
 readme = "README.md"
-categories = ["bioinformatics", "genomics", "computational biology"]
+categories = ["science::bioinformatics", "command-line-utilities"]
 keywords = [
     "orphos",
     "bioinformatics",
