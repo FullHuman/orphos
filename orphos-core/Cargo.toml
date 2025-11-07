@@ -10,7 +10,6 @@ readme = "README.md"
 categories = ["bioinformatics", "genomics", "computational biology"]
 keywords = [
     "orphos",
-    "gene prediction",
     "bioinformatics",
     "genomics",
     "prodigal"
