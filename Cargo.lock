@@ -1054,6 +1054,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "orphos"
+version = "0.1.0"
+dependencies = [
+ "bio 1.6.0",
+ "console_error_panic_hook",
+ "getrandom 0.2.16",
+ "orphos-core",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "orphos-cli"
 version = "0.1.0"
 dependencies = [
@@ -1078,19 +1091,6 @@ dependencies = [
  "rayon",
  "thiserror 2.0.12",
  "wide",
-]
-
-[[package]]
-name = "orphos-wasm"
-version = "0.1.0"
-dependencies = [
- "bio 1.6.0",
- "console_error_panic_hook",
- "getrandom 0.2.16",
- "orphos-core",
- "serde",
- "serde-wasm-bindgen",
- "wasm-bindgen",
 ]
 
 [[package]]

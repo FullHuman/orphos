@@ -31,7 +31,7 @@ jobs:
 
     - name: Build WASM package
       working-directory: orphos-wasm
-      run: wasm-pack build --target web --release
+      run: wasm-pack build --scope fullhuman --target web --release
 
     - name: Verify package
       working-directory: orphos-wasm/pkg

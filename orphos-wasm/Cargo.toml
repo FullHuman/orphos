@@ -1,8 +1,10 @@
 [package]
-name = "orphos-wasm"
+name = "orphos"
 version = "0.1.0"
 edition = "2021"
 description = "WebAssembly bindings for Orphos gene finder"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/fullhuman/orphos"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
