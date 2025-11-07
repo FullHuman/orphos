@@ -11,7 +11,7 @@ name = "prodigal"
 crate-type = ["cdylib"]
 
 [dependencies]
-prodigal-core = { path = "../prodigal-core" }
+orphos-core = { path = "../orphos-core" }
 pyo3 = { version = "0.27.1", features = ["extension-module"] }
 bio = "2.3.0"
 

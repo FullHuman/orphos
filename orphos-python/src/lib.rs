@@ -1,9 +1,9 @@
-use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyIOError};
-use std::io::Cursor;
 use bio::io::fasta;
+use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::prelude::*;
+use std::io::Cursor;
 
-use orphos_core::config::{OutputFormat, OrphosConfig};
+use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
 use orphos_core::output::write_results;
 
@@ -14,31 +14,31 @@ pub struct OrphosOptions {
     #[pyo3(get, set)]
     /// Operating mode: "single" for single genome mode, "meta" for metagenomic mode
     pub mode: String,
-    
+
     #[pyo3(get, set)]
     /// Output format: "gbk" (GenBank), "gff" (GFF3), "sco" (simple coordinates), "gca" (gene calls)
     pub format: String,
-    
+
     #[pyo3(get, set)]
     /// Closed ends - don't allow genes to run off edges
     pub closed_ends: bool,
-    
+
     #[pyo3(get, set)]
     /// Mask runs of N's in the sequence
     pub mask_n_runs: bool,
-    
+
     #[pyo3(get, set)]
     /// Force the use of non-Shine-Dalgarno gene model
     pub force_non_sd: bool,
-    
+
     #[pyo3(get, set)]
     /// Translation table (1-25, excluding 7, 8, and 17-20)
     pub translation_table: Option<u8>,
-    
+
     #[pyo3(get, set)]
     /// Number of threads to use (None for default)
     pub num_threads: Option<usize>,
-    
+
     #[pyo3(get, set)]
     /// Suppress informational output
     pub quiet: bool,
@@ -78,11 +78,11 @@ impl OrphosOptions {
             quiet,
         })
     }
-    
+
     fn __repr__(&self) -> String {
         format!(
             "OrphosOptions(mode='{}', format='{}', closed_ends={}, mask_n_runs={}, force_non_sd={}, translation_table={:?}, num_threads={:?}, quiet={})",
-            self.mode, self.format, self.closed_ends, self.mask_n_runs, 
+            self.mode, self.format, self.closed_ends, self.mask_n_runs,
             self.force_non_sd, self.translation_table, self.num_threads, self.quiet
         )
     }
@@ -94,11 +94,11 @@ pub struct OrphosResult {
     #[pyo3(get)]
     /// The formatted output (GenBank, GFF, etc.)
     pub output: String,
-    
+
     #[pyo3(get)]
     /// Total number of genes predicted
     pub gene_count: usize,
-    
+
     #[pyo3(get)]
     /// Number of sequences analyzed
     pub sequence_count: usize,
@@ -109,7 +109,9 @@ impl OrphosResult {
     fn __repr__(&self) -> String {
         format!(
             "OrphosResult(gene_count={}, sequence_count={}, output_length={})",
-            self.gene_count, self.sequence_count, self.output.len()
+            self.gene_count,
+            self.sequence_count,
+            self.output.len()
         )
     }
 }
@@ -121,10 +123,9 @@ fn parse_fasta_string(content: &str) -> PyResult<Vec<(String, Option<String>, Ve
     let mut sequences = Vec::new();
 
     for result in reader.records() {
-        let record = result.map_err(|e| {
-            PyIOError::new_err(format!("FASTA parsing error: {}", e))
-        })?;
-        
+        let record =
+            result.map_err(|e| PyIOError::new_err(format!("FASTA parsing error: {}", e)))?;
+
         let id = record.id().to_string();
         let description = record.desc().map(String::from);
         let seq = record.seq().to_vec();
@@ -144,7 +145,7 @@ fn options_to_config(options: &OrphosOptions) -> PyResult<OrphosConfig> {
     if let Some(tt) = options.translation_table {
         if !(1..=25).contains(&tt) || tt == 7 || tt == 8 || (17..=20).contains(&tt) {
             return Err(PyValueError::new_err(
-                "Invalid translation table. Must be 1-25, excluding 7, 8, and 17-20"
+                "Invalid translation table. Must be 1-25, excluding 7, 8, and 17-20",
             ));
         }
     }
@@ -155,15 +156,17 @@ fn options_to_config(options: &OrphosOptions) -> PyResult<OrphosConfig> {
         "gff" => OutputFormat::Gff,
         "sco" => OutputFormat::Sco,
         "gca" => OutputFormat::Gca,
-        _ => return Err(PyValueError::new_err(
-            "Invalid output format. Must be one of: gbk, genbank, gff, sco, gca"
-        )),
+        _ => {
+            return Err(PyValueError::new_err(
+                "Invalid output format. Must be one of: gbk, genbank, gff, sco, gca",
+            ))
+        }
     };
 
     // Validate mode
     if options.mode != "single" && options.mode != "meta" {
         return Err(PyValueError::new_err(
-            "Invalid mode. Must be 'single' or 'meta'"
+            "Invalid mode. Must be 'single' or 'meta'",
         ));
     }
 
@@ -195,10 +198,7 @@ fn options_to_config(options: &OrphosOptions) -> PyResult<OrphosConfig> {
 ///     >>> print(result.gene_count)
 #[pyfunction]
 #[pyo3(signature = (fasta_content, options=None))]
-fn analyze_sequence(
-    fasta_content: &str,
-    options: Option<OrphosOptions>,
-) -> PyResult<OrphosResult> {
+fn analyze_sequence(fasta_content: &str, options: Option<OrphosOptions>) -> PyResult<OrphosResult> {
     // Use default options if none provided
     let options = options.unwrap_or_else(|| OrphosOptions {
         mode: "single".to_string(),
@@ -263,10 +263,7 @@ fn analyze_sequence(
 ///     >>> print(result.gene_count)
 #[pyfunction]
 #[pyo3(signature = (file_path, options=None))]
-fn analyze_file(
-    file_path: &str,
-    options: Option<OrphosOptions>,
-) -> PyResult<OrphosResult> {
+fn analyze_file(file_path: &str, options: Option<OrphosOptions>) -> PyResult<OrphosResult> {
     // Read file content
     let fasta_content = std::fs::read_to_string(file_path)
         .map_err(|e| PyIOError::new_err(format!("Failed to read file '{}': {}", file_path, e)))?;
@@ -280,14 +277,14 @@ fn analyze_file(
 /// This module provides Python bindings for Orphos, a tool for finding
 /// protein-coding genes in bacterial and archaeal genomes.
 #[pymodule]
-fn prodigal(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn orphos(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OrphosOptions>()?;
     m.add_class::<OrphosResult>()?;
     m.add_function(wrap_pyfunction!(analyze_sequence, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_file, m)?)?;
-    
+
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__doc__", "Orphos gene prediction for microbial genomes")?;
-    
+
     Ok(())
 }
