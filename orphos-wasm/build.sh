@@ -1,22 +1,14 @@
 #!/bin/bash
 set -e
 
-echo "Building Orphos WebAssembly module..."
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source $HOME/.cargo/env
 
-# Check if wasm-pack is installed
-if ! command -v wasm-pack &> /dev/null; then
-    echo "Error: wasm-pack is not installed."
-    echo "Install it with: cargo install wasm-pack"
-    exit 1
-fi
+# Install wasm-pack
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
 # Build the WASM module
 echo "Compiling Rust to WebAssembly..."
 wasm-pack build --target web --out-dir www/pkg
-
-echo "✓ Build complete!"
-echo ""
-echo "To start the development server, run:"
-echo "  cd prodigal-wasm && npm run serve"
-echo ""
-echo "Then open http://localhost:8080 in your browser"
+npm run build:release
