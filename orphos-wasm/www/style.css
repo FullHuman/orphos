@@ -6,40 +6,49 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: rgb(0, 0, 0);
     min-height: 100vh;
     padding: 20px;
-    color: #333;
+    color: rgb(161, 161, 170);
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
-    background: white;
+    background: rgb(24, 24, 27);
     border-radius: 12px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+    border: 1px solid rgba(20, 184, 166, 0.2);
 }
 
 header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: rgb(0, 0, 0);
     color: white;
     padding: 40px 30px;
     text-align: center;
+    border-bottom: 2px solid rgb(20, 184, 166);
 }
 
 header h1 {
     font-size: 2.5em;
     margin-bottom: 10px;
+    color: white;
 }
 
 header p {
     font-size: 1.1em;
     opacity: 0.9;
+    color: rgb(161, 161, 170);
+}
+
+header a:hover {
+    opacity: 1 !important;
 }
 
 main {
     padding: 30px;
+    background: rgb(24, 24, 27);
 }
 
 section {
@@ -47,10 +56,10 @@ section {
 }
 
 h2 {
-    color: #667eea;
+    color: white;
     margin-bottom: 20px;
     font-size: 1.5em;
-    border-bottom: 2px solid #667eea;
+    border-bottom: 2px solid rgb(20, 184, 166);
     padding-bottom: 10px;
 }
 
@@ -69,7 +78,7 @@ h2 {
 .file-button {
     display: inline-block;
     padding: 12px 24px;
-    background: #667eea;
+    background: rgb(20, 184, 166);
     color: white;
     border-radius: 6px;
     font-weight: 500;
@@ -77,11 +86,11 @@ h2 {
 }
 
 .file-button:hover {
-    background: #5568d3;
+    background: rgb(13, 148, 136);
 }
 
 .file-name {
-    color: #666;
+    color: rgb(161, 161, 170);
     font-style: italic;
 }
 
@@ -98,23 +107,25 @@ input[type="file"] {
     display: block;
     margin-bottom: 8px;
     font-weight: 500;
-    color: #555;
+    color: white;
 }
 
 textarea {
     width: 100%;
     padding: 12px;
-    border: 2px solid #e0e0e0;
+    border: 2px solid rgba(20, 184, 166, 0.3);
     border-radius: 6px;
     font-family: "Courier New", monospace;
     font-size: 14px;
     resize: vertical;
     transition: border-color 0.3s;
+    background: rgb(0, 0, 0);
+    color: rgb(161, 161, 170);
 }
 
 textarea:focus {
     outline: none;
-    border-color: #667eea;
+    border-color: rgb(20, 184, 166);
 }
 
 /* Options */
@@ -126,30 +137,31 @@ textarea:focus {
     display: block;
     margin-bottom: 8px;
     font-weight: 500;
-    color: #555;
+    color: white;
 }
 
 select {
     width: 100%;
     padding: 10px;
-    border: 2px solid #e0e0e0;
+    border: 2px solid rgba(20, 184, 166, 0.3);
     border-radius: 6px;
     font-size: 14px;
-    background: white;
+    background: rgb(0, 0, 0);
+    color: rgb(161, 161, 170);
     cursor: pointer;
     transition: border-color 0.3s;
 }
 
 select:focus {
     outline: none;
-    border-color: #667eea;
+    border-color: rgb(20, 184, 166);
 }
 
 .help-text {
     display: block;
     margin-top: 5px;
     font-size: 0.85em;
-    color: #888;
+    color: rgb(161, 161, 170);
 }
 
 .checkbox-group {
@@ -168,11 +180,12 @@ select:focus {
     width: 18px;
     height: 18px;
     cursor: pointer;
+    accent-color: rgb(20, 184, 166);
 }
 
 .checkbox-group span {
     font-size: 15px;
-    color: #555;
+    color: rgb(161, 161, 170);
 }
 
 /* Buttons */
@@ -189,7 +202,7 @@ select:focus {
 }
 
 .analyze-btn {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: rgb(20, 184, 166);
     color: white;
     width: 100%;
     margin-top: 10px;
@@ -197,7 +210,8 @@ select:focus {
 
 .analyze-btn:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 5px 15px rgba(20, 184, 166, 0.4);
+    background: rgb(13, 148, 136);
 }
 
 .analyze-btn:disabled {
@@ -207,13 +221,13 @@ select:focus {
 
 .download-btn,
 .copy-btn {
-    background: #667eea;
+    background: rgb(20, 184, 166);
     color: white;
 }
 
 .download-btn:hover,
 .copy-btn:hover {
-    background: #5568d3;
+    background: rgb(13, 148, 136);
 }
 
 /* Results */
@@ -225,16 +239,16 @@ select:focus {
 }
 
 .stat-item {
-    background: #f5f7ff;
+    background: rgb(0, 0, 0);
     padding: 20px;
     border-radius: 8px;
-    border-left: 4px solid #667eea;
+    border-left: 4px solid rgb(20, 184, 166);
 }
 
 .stat-label {
     display: block;
     font-size: 0.9em;
-    color: #666;
+    color: rgb(161, 161, 170);
     margin-bottom: 5px;
 }
 
@@ -242,7 +256,7 @@ select:focus {
     display: block;
     font-size: 2em;
     font-weight: bold;
-    color: #667eea;
+    color: rgb(20, 184, 166);
 }
 
 .output-controls {
@@ -252,8 +266,8 @@ select:focus {
 }
 
 .output-container {
-    background: #f8f9fa;
-    border: 1px solid #e0e0e0;
+    background: rgb(0, 0, 0);
+    border: 1px solid rgba(20, 184, 166, 0.3);
     border-radius: 6px;
     max-height: 500px;
     overflow: auto;
@@ -267,19 +281,21 @@ select:focus {
     line-height: 1.5;
     white-space: pre-wrap;
     word-wrap: break-word;
+    color: rgb(161, 161, 170);
 }
 
 /* Error */
 .error-section {
-    background: #fee;
-    border: 2px solid #fcc;
+    background: rgba(239, 68, 68, 0.1);
+    border: 2px solid rgba(239, 68, 68, 0.5);
     border-radius: 6px;
     padding: 20px;
-    color: #c33;
+    color: rgb(248, 113, 113);
 }
 
 .error-section h3 {
     margin-bottom: 10px;
+    color: rgb(248, 113, 113);
 }
 
 /* Loading */
@@ -300,8 +316,8 @@ select:focus {
 .spinner {
     width: 50px;
     height: 50px;
-    border: 5px solid rgba(255, 255, 255, 0.3);
-    border-top-color: white;
+    border: 5px solid rgba(20, 184, 166, 0.3);
+    border-top-color: rgb(20, 184, 166);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
@@ -318,11 +334,76 @@ select:focus {
 
 /* Footer */
 footer {
-    background: #f8f9fa;
-    padding: 20px;
+    background: rgb(0, 0, 0);
+    padding: 40px 30px;
+    color: rgb(161, 161, 170);
+    font-size: 0.95em;
+    line-height: 1.6;
+    border-top: 1px solid rgba(20, 184, 166, 0.3);
+}
+
+.about-section {
+    max-width: 900px;
+    margin: 0 auto 30px;
+    text-align: left;
+}
+
+.about-section h2 {
+    color: white;
+    font-size: 1.8em;
+    margin-bottom: 15px;
     text-align: center;
-    color: #666;
+}
+
+.about-section h3 {
+    color: rgb(20, 184, 166);
+    font-size: 1.3em;
+    margin-top: 25px;
+    margin-bottom: 12px;
+}
+
+.about-section p {
+    margin: 10px 0;
+    color: rgb(161, 161, 170);
+}
+
+.about-section ul {
+    margin: 15px 0 15px 30px;
+    color: rgb(161, 161, 170);
+}
+
+.about-section li {
+    margin: 8px 0;
+}
+
+.about-section a {
+    color: rgb(20, 184, 166);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.about-section a:hover {
+    text-decoration: underline;
+}
+
+.about-section strong {
+    color: white;
+}
+
+footer .credits {
+    text-align: center;
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(20, 184, 166, 0.3);
     font-size: 0.9em;
+}
+
+.subtitle {
+    font-size: 0.9em;
+    margin-top: 5px;
+    opacity: 0.85;
+    font-style: italic;
+    color: rgb(161, 161, 170);
 }
 
 footer p {

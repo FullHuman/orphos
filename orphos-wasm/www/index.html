@@ -3,14 +3,196 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orphos - Gene Prediction</title>
+    
+    <!-- Primary Meta Tags -->
+    <title>Orphos - Fast Prodigal Alternative for Gene Prediction in Browser | Prokaryotic Gene Finder</title>
+    <meta name="title" content="Orphos - Fast Prodigal Alternative for Gene Prediction in Browser | Prokaryotic Gene Finder">
+    <meta name="description" content="Run Prodigal-compatible gene prediction directly in your browser with Orphos. Fast Rust implementation of prokaryotic gene finding for bacterial and archaeal genomes. No installation required - analyze FASTA sequences instantly with WebAssembly.">
+    <meta name="keywords" content="prodigal, prodigal alternative, gene prediction, gene finder, prokaryotic gene prediction, bacterial gene prediction, archaeal gene prediction, orf finder, gene calling, bioinformatics, genomics, FASTA analysis, WebAssembly, browser-based bioinformatics, orphos, metagenomics, microbial genomics, genome annotation, online gene prediction, free gene finder, prodigal online, prodigal web, rust bioinformatics">
+    <meta name="author" content="FullHuman">
+    <meta name="robots" content="index, follow">
+    <meta name="language" content="English">
+    <meta name="revisit-after" content="7 days">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://orphos.full-human.com/">
+    <meta property="og:title" content="Orphos - Fast Prodigal Alternative for Gene Prediction in Browser">
+    <meta property="og:description" content="Run Prodigal-compatible gene prediction directly in your browser. Fast Rust implementation for prokaryotic gene finding. Analyze bacterial and archaeal genomes instantly with WebAssembly - no installation required.">
+    <meta property="og:site_name" content="Orphos Gene Finder">
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://orphos.full-human.com/">
+    <meta property="twitter:title" content="Orphos - Fast Prodigal Alternative for Gene Prediction in Browser">
+    <meta property="twitter:description" content="Run Prodigal-compatible gene prediction directly in your browser. Fast Rust implementation for prokaryotic gene finding. No installation required.">
+    
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://orphos.full-human.com/">
+    
+    <!-- Structured Data / Schema.org - Software Application -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Orphos",
+      "applicationCategory": "BioinformaticsApplication",
+      "operatingSystem": "Web Browser",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "description": "Fast Rust implementation of Prodigal for prokaryotic gene prediction. Run gene finding algorithms directly in your browser using WebAssembly.",
+      "url": "https://orphos.full-human.com/",
+      "softwareVersion": "0.1.0",
+      "author": {
+        "@type": "Organization",
+        "name": "FullHuman"
+      },
+      "featureList": [
+        "Prokaryotic gene prediction",
+        "Prodigal-compatible algorithm",
+        "WebAssembly-powered browser execution",
+        "Single genome and metagenomic modes",
+        "Multiple output formats (GFF3, GenBank, SCO)",
+        "No installation required",
+        "Privacy-focused local processing"
+      ],
+      "screenshot": "https://orphos.full-human.com/screenshot.png",
+      "keywords": "prodigal, gene prediction, prokaryotic, bacterial, archaeal, bioinformatics, WebAssembly, genome annotation"
+    }
+    </script>
+
+    <!-- Structured Data / Schema.org - FAQ -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is Orphos?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Orphos is a fast, browser-based implementation of Prodigal for prokaryotic gene prediction. It runs entirely in your web browser using WebAssembly, allowing you to analyze bacterial and archaeal genomes without installing any software."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Orphos a replacement for Prodigal?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes! Orphos implements the same dynamic programming algorithm as Prodigal and produces compatible output formats."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is my genomic data sent to a server?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Orphos runs 100% locally in your web browser. Your sequences never leave your computer, ensuring complete privacy for sensitive or proprietary genomic data."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What types of genomes can Orphos analyze?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Orphos is designed for prokaryotic genomes, including bacteria and archaea. It supports complete genomes, draft assemblies, plasmids, and metagenomic contigs. It is not suitable for eukaryotic gene prediction."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I use Orphos for gene prediction?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Simply upload a FASTA file or paste your sequence, select your analysis mode (single genome or metagenomic), choose an output format (GFF3, GenBank, SCO, or GCA), and click Analyze. Results appear in seconds and can be downloaded or copied."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Orphos work offline?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "After the initial page load, Orphos can work offline thanks to Progressive Web App technology. All gene prediction happens locally in your browser without requiring internet connectivity."
+          }
+        }
+      ]
+    }
+    </script>
+    
+    <!-- Structured Data / Schema.org - HowTo -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to Find Genes in Bacterial Genomes with Orphos",
+      "description": "Step-by-step guide to using Orphos for prokaryotic gene prediction in your web browser",
+      "step": [
+        {
+          "@type": "HowToStep",
+          "name": "Load sequence data",
+          "text": "Upload a FASTA file containing your bacterial or archaeal genome sequence, or paste the sequence directly into the text area.",
+          "url": "https://orphos.full-human.com/#input-section"
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Select analysis mode",
+          "text": "Choose 'Single Genome' for complete genomes or 'Metagenomic' for short, fragmented sequences from metagenomic assemblies.",
+          "url": "https://orphos.full-human.com/#options-section"
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Choose output format",
+          "text": "Select your preferred output format: GFF3 for genome browsers, GenBank for NCBI, or SCO/GCA for custom parsing.",
+          "url": "https://orphos.full-human.com/#options-section"
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Configure advanced options",
+          "text": "Optionally set translation table, closed ends, mask N runs, or force non-Shine-Dalgarno models based on your organism.",
+          "url": "https://orphos.full-human.com/#options-section"
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Analyze sequence",
+          "text": "Click the 'Analyze Sequence' button. Orphos will process your genome locally in your browser and display the predicted genes.",
+          "url": "https://orphos.full-human.com/#analyze"
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Download results",
+          "text": "Download the results file or copy the predictions to your clipboard for further analysis.",
+          "url": "https://orphos.full-human.com/#results"
+        }
+      ]
+    }
+    </script>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Theme Color -->
+    <meta name="theme-color" content="rgb(20, 184, 166)">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Orphos">
+    
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🧬 Orphos Gene Finder</h1>
-            <p>Prokaryotic gene prediction in your browser</p>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 10px;">
+                <h1 style="margin: 0;">Orphos - Prodigal-Compatible Gene Finder</h1>
+                <a href="https://github.com/FullHuman/orphos" target="_blank" rel="noopener noreferrer" style="color: white; opacity: 0.9; transition: opacity 0.3s;" title="View on GitHub">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" style="display: block;">
+                        <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.475 2 2 6.588 2 12.253c0 4.537 2.862 8.369 6.838 9.727.5.09.687-.218.687-.487 0-.243-.013-1.05-.013-1.91C7 20.059 6.35 18.957 6.15 18.38c-.113-.295-.6-1.205-1.025-1.448-.35-.192-.85-.667-.013-.68.788-.012 1.35.744 1.538 1.051.9 1.551 2.338 1.116 2.912.846.088-.666.35-1.115.638-1.371-2.225-.256-4.55-1.14-4.55-5.062 0-1.115.387-2.038 1.025-2.756-.1-.256-.45-1.307.1-2.717 0 0 .837-.269 2.75 1.051.8-.23 1.65-.346 2.5-.346.85 0 1.7.115 2.5.346 1.912-1.333 2.75-1.05 2.75-1.05.55 1.409.2 2.46.1 2.716.637.718 1.025 1.628 1.025 2.756 0 3.934-2.337 4.806-4.562 5.062.362.32.675.936.675 1.897 0 1.371-.013 2.473-.013 2.82 0 .268.188.589.688.486a10.039 10.039 0 0 0 4.932-3.74A10.447 10.447 0 0 0 22 12.253C22 6.588 17.525 2 12 2Z"></path>
+                    </svg>
+                </a>
+            </div>
+            <p>Fast prokaryotic gene prediction running directly in your browser</p>
         </header>
 
         <main>
@@ -139,8 +321,83 @@ GGCTGA"></textarea>
         </main>
 
         <footer>
-            <p>Orphos: Prokaryotic Dynamic Programming Genefinding Algorithm</p>
-            <p>Running locally in your browser using WebAssembly</p>
+            <section class="about-section">
+                <h2>About Orphos - The Browser-Based Prodigal Alternative</h2>
+                <p>
+                    <strong>Orphos</strong> is a high-performance Rust implementation of the Prodigal gene prediction algorithm, 
+                    designed for finding protein-coding genes in bacterial and archaeal genomes. Unlike traditional Prodigal 
+                    which requires installation, Orphos runs entirely in your web browser using WebAssembly technology.
+                </p>
+                
+                <h3>Why Use Orphos Instead of Prodigal?</h3>
+                <ul>
+                    <li><strong>No Installation Required:</strong> Run gene prediction instantly without installing Python, Prodigal, or any dependencies</li>
+                    <li><strong>Privacy First:</strong> All analysis runs locally in your browser - your sequences never leave your computer</li>
+                    <li><strong>Fast Performance:</strong> Powered by Rust and WebAssembly for near-native speed</li>
+                    <li><strong>Prodigal-Compatible:</strong> Implements the same dynamic programming algorithm as Prodigal</li>
+                    <li><strong>Cross-Platform:</strong> Works on any device with a modern web browser (Windows, Mac, Linux, even mobile)</li>
+                    <li><strong>Always Available:</strong> No server downtime or API rate limits</li>
+                </ul>
+
+                <h3>Features</h3>
+                <ul>
+                    <li>Prokaryotic gene finding for bacterial and archaeal genomes</li>
+                    <li>Single genome and metagenomic analysis modes</li>
+                    <li>Multiple output formats: GFF3, GenBank (GBK), SCO, GCA</li>
+                    <li>Support for all standard genetic codes (translation tables 1-25)</li>
+                    <li>Advanced options: closed ends, masked N-runs, forced gene models</li>
+                    <li>Real-time analysis with instant results</li>
+                </ul>
+
+                <h3>Use Cases</h3>
+                <p>
+                    Perfect for microbiologists, bioinformaticians, and genomics researchers who need to:
+                </p>
+                <ul>
+                    <li>Annotate bacterial or archaeal genomes</li>
+                    <li>Identify protein-coding genes in prokaryotic sequences</li>
+                    <li>Analyze metagenomic assemblies and contigs</li>
+                    <li>Perform quick ORF finding and gene calling</li>
+                    <li>Validate genome annotations</li>
+                    <li>Process FASTA sequences without command-line tools</li>
+                </ul>
+
+                <h3>How It Works</h3>
+                <p>
+                    Orphos implements the same dynamic programming genefinding algorithm as Prodigal, using:
+                </p>
+                <ul>
+                    <li>Hidden Markov Models (HMM) for gene structure prediction</li>
+                    <li>Shine-Dalgarno motif detection for ribosomal binding sites</li>
+                    <li>GC frame bias analysis</li>
+                    <li>Start codon scoring and selection</li>
+                    <li>Anonymous training on input sequences</li>
+                </ul>
+
+                <h3>Supported Input</h3>
+                <p>
+                    Upload or paste FASTA format sequences (.fasta, .fa, .fna files). Works with:
+                </p>
+                <ul>
+                    <li>Complete bacterial genomes</li>
+                    <li>Complete archaeal genomes</li>
+                    <li>Plasmids and chromosomes</li>
+                    <li>Metagenomic contigs and scaffolds</li>
+                    <li>Draft genome assemblies</li>
+                </ul>
+
+                <h3>Open Source</h3>
+                <p>
+                    Orphos is free and open source software licensed under GPL-3.0. 
+                    <a href="https://github.com/FullHuman/orphos" target="_blank" rel="noopener noreferrer">View source code on GitHub</a>
+                </p>
+            </section>
+
+            <p class="credits">
+                <strong>Orphos:</strong> Prokaryotic Dynamic Programming Genefinding Algorithm<br>
+                A fast Rust implementation compatible with Prodigal<br>
+                Running locally in your browser using WebAssembly - No installation, no server, completely private
+            </p>
         </footer>
     </div>
 
