@@ -87,6 +87,7 @@ jobs:
       if: matrix.cross
       run: |
         cargo install cross --git https://github.com/cross-rs/cross
+        rustup target add x86_64-apple-darwin
 
     - name: Build release binary
       run: |
