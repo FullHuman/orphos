@@ -6,6 +6,20 @@
 
 A fast, parallel Rust implementation of Prodigal, a tool for finding protein-coding genes in microbial genomes.
 
+## What is Orphos?
+
+Orphos is a high-performance reimplementation of [Prodigal](https://github.com/hyattpd/Prodigal), the widely-used prokaryotic gene prediction tool. Written in Rust, Orphos delivers the same accurate gene finding algorithm with improved performance and modern language features.
+
+### Why Choose Orphos Over Prodigal?
+
+- **Faster Performance**: Multi-threaded processing using Rayon for parallel genome analysis
+- **Memory Efficient**: Optimized memory usage for handling large genomes and metagenomes
+- **Browser Support**: Unique WebAssembly build - runs in web browsers
+- **100% Compatible**: Output formats fully compatible with original Prodigal (GFF3, GenBank, etc.)
+- **Modern Codebase**: Written in safe Rust with excellent error handling
+- **Multiple Interfaces**: CLI, Rust library, Python bindings, and WebAssembly
+- **Easy Installation**: Available via Cargo, pip, Homebrew, and Conda
+
 ## Components
 
 Orphos is available in multiple forms:
