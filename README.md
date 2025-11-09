@@ -43,11 +43,6 @@ Orphos is available in multiple forms:
 brew install FullHuman/tap/orphos
 ```
 
-### Conda
-```bash
-conda install -c bioconda orphos
-```
-
 ### Using Cargo
 ```bash
 cargo install orphos-cli
