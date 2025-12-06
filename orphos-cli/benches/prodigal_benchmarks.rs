@@ -97,7 +97,7 @@ fn run_orphos_cli(
     cmd.arg("run")
         .arg("--release")
         .arg("--bin")
-        .arg("orphos-cli")
+        .arg("orphos")
         .arg("--")
         .arg("-i")
         .arg(input_file)
@@ -193,8 +193,8 @@ fn benchmark_single_threaded(c: &mut Criterion) {
             eprintln!("Warning: Pyrodigal not found, skipping pyrodigal benchmark");
         }
 
-        // Benchmark orphos-cli (single-threaded)
-        group.bench_function("prodigal_cli", |b| {
+        // Benchmark orphos (single-threaded)
+        group.bench_function("orphos", |b| {
             b.iter_custom(|iters| {
                 let mut total_duration = Duration::new(0, 0);
                 for _ in 0..iters {
@@ -293,9 +293,9 @@ fn benchmark_multi_threaded(c: &mut Criterion) {
                 );
             }
 
-            // Benchmark orphos-cli (multi-threaded)
+            // Benchmark orphos (multi-threaded)
             group.bench_with_input(
-                BenchmarkId::new("prodigal_cli", threads),
+                BenchmarkId::new("orphos", threads),
                 &threads,
                 |b, &threads| {
                     b.iter_custom(|iters| {
@@ -343,6 +343,33 @@ fn benchmark_scaling_analysis(c: &mut Criterion) {
     let thread_counts = [1, 4, 8];
 
     for &threads in &thread_counts {
+        // Original prodigal
+        if threads == 1 && Command::new("prodigal").arg("--help").output().is_ok() {
+            group.bench_with_input(
+                BenchmarkId::new("prodigal_scaling", threads),
+                &threads,
+                |b, &_threads| {
+                    b.iter_custom(|iters| {
+                        let mut total_duration = Duration::new(0, 0);
+                        for _ in 0..iters {
+                            let output_file = NamedTempFile::new().unwrap();
+                            let duration = run_original_prodigal(
+                                black_box(input_file),
+                                output_file.path().to_str().unwrap(),
+                                None,
+                            )
+                            .unwrap_or_else(|e| {
+                                eprintln!("Original prodigal scaling benchmark failed: {}", e);
+                                Duration::from_secs(0)
+                            });
+                            total_duration += duration;
+                        }
+                        total_duration
+                    });
+                },
+            );
+        }
+
         // Pyrodigal scaling (if available)
         if threads == 1 && Command::new("pyrodigal").arg("--help").output().is_ok() {
             group.bench_with_input(
@@ -370,9 +397,9 @@ fn benchmark_scaling_analysis(c: &mut Criterion) {
             );
         }
 
-        // orphos-cli scaling
+        // orphos scaling
         group.bench_with_input(
-            BenchmarkId::new("prodigal_cli_scaling", threads),
+            BenchmarkId::new("orphos_scaling", threads),
             &threads,
             |b, &threads| {
                 b.iter_custom(|iters| {
