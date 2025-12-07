@@ -274,7 +274,7 @@ impl NodeSliceExtension for [Node] {
 }
 
 /// Training data structure containing all learned parameters
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Training {
     /// GC content of the sequence
     pub gc_content: f64,
@@ -467,6 +467,10 @@ pub struct Gene {
     pub score: GeneScore,
     /// Metadata and annotation details
     pub annotation: GeneAnnotation,
+    /// Display score for GFF column 6 (re-scored value in meta mode)
+    /// This is separate from score.total_score because Prodigal uses
+    /// re-scored values for column 6 but original values for attributes
+    pub display_score: Option<f64>,
 }
 
 /// Mask for regions to exclude from gene prediction (e.g., runs of N characters)

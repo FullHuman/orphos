@@ -1,0 +1,7 @@
+---
+source: orphos-cli/tests/meta_genomes_equivalence.rs
+expression: summary
+---
+file	similarity(%)	coord_match(%)	exact	orig_hash	rust_hash
+ecoli.fasta	56.452	99.930	no	00a4ae70baa3	73394cf5247e
+salmonella.fasta	17.403	99.957	no	1f477c1793a5	a25cdf8bc731

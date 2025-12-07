@@ -13,6 +13,16 @@ fn run_original_prodigal(
     output_file: &str,
     threads: Option<usize>,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
+    run_original_prodigal_with_mode(input_file, output_file, threads, "single")
+}
+
+// Helper function to run original prodigal with specified mode
+fn run_original_prodigal_with_mode(
+    input_file: &str,
+    output_file: &str,
+    threads: Option<usize>,
+    mode: &str,
+) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
     let mut cmd = Command::new("prodigal");
@@ -23,7 +33,7 @@ fn run_original_prodigal(
         .arg("-f")
         .arg("gff")
         .arg("-p")
-        .arg("single");
+        .arg(mode);
 
     // Original prodigal doesn't have threading, but we include this for consistency
     if threads.is_some() {
@@ -50,6 +60,16 @@ fn run_pyrodigal(
     output_file: &str,
     threads: Option<usize>,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
+    run_pyrodigal_with_mode(input_file, output_file, threads, "single")
+}
+
+// Helper function to run pyrodigal with specified mode
+fn run_pyrodigal_with_mode(
+    input_file: &str,
+    output_file: &str,
+    threads: Option<usize>,
+    mode: &str,
+) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
     let mut cmd = Command::new("pyrodigal");
@@ -60,7 +80,7 @@ fn run_pyrodigal(
         .arg("-f")
         .arg("gff")
         .arg("-p")
-        .arg("single");
+        .arg(mode);
 
     if let Some(t) = threads {
         cmd.arg("-j").arg(t.to_string());
@@ -86,6 +106,16 @@ fn run_orphos_cli(
     output_file: &str,
     threads: Option<usize>,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
+    run_orphos_cli_with_mode(input_file, output_file, threads, "single")
+}
+
+// Helper function to run orphos with specified mode
+fn run_orphos_cli_with_mode(
+    input_file: &str,
+    output_file: &str,
+    threads: Option<usize>,
+    mode: &str,
+) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
     // Set thread count via environment variable if specified
@@ -106,7 +136,7 @@ fn run_orphos_cli(
         .arg("-f")
         .arg("gff")
         .arg("-p")
-        .arg("single");
+        .arg(mode);
 
     let output = cmd.output()?;
     let duration = start.elapsed();
@@ -426,11 +456,109 @@ fn benchmark_scaling_analysis(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark meta mode (metagenomic) - single threaded comparison
+fn benchmark_meta_mode_single_threaded(c: &mut Criterion) {
+    let test_files = [
+        ("ecoli", "tests/data/ecoli.fasta"),
+        ("salmonella", "tests/data/salmonella.fasta"),
+    ];
+
+    for (name, input_file) in test_files {
+        if !Path::new(input_file).exists() {
+            eprintln!("Warning: {} not found, skipping benchmark", input_file);
+            continue;
+        }
+
+        let file_size = get_file_size(input_file);
+        let mut group = c.benchmark_group(format!("{}_meta_single_threaded", name));
+        group.throughput(Throughput::Bytes(file_size));
+
+        // Check if original prodigal is available
+        if Command::new("prodigal").arg("--help").output().is_ok() {
+            group.bench_function("original_prodigal_meta", |b| {
+                b.iter_custom(|iters| {
+                    let mut total_duration = Duration::new(0, 0);
+                    for _ in 0..iters {
+                        let output_file = NamedTempFile::new().unwrap();
+                        let duration = run_original_prodigal_with_mode(
+                            black_box(input_file),
+                            output_file.path().to_str().unwrap(),
+                            None,
+                            "meta",
+                        )
+                        .unwrap_or_else(|e| {
+                            eprintln!("Original prodigal meta benchmark failed: {}", e);
+                            Duration::from_secs(0)
+                        });
+                        total_duration += duration;
+                    }
+                    total_duration
+                });
+            });
+        } else {
+            eprintln!(
+                "Warning: Original prodigal not found, skipping original_prodigal_meta benchmark"
+            );
+        }
+
+        // Check if pyrodigal is available
+        if Command::new("pyrodigal").arg("--help").output().is_ok() {
+            group.bench_function("pyrodigal_meta", |b| {
+                b.iter_custom(|iters| {
+                    let mut total_duration = Duration::new(0, 0);
+                    for _ in 0..iters {
+                        let output_file = NamedTempFile::new().unwrap();
+                        let duration = run_pyrodigal_with_mode(
+                            black_box(input_file),
+                            output_file.path().to_str().unwrap(),
+                            Some(1),
+                            "meta",
+                        )
+                        .unwrap_or_else(|e| {
+                            eprintln!("Pyrodigal meta benchmark failed: {}", e);
+                            Duration::from_secs(0)
+                        });
+                        total_duration += duration;
+                    }
+                    total_duration
+                });
+            });
+        } else {
+            eprintln!("Warning: Pyrodigal not found, skipping pyrodigal_meta benchmark");
+        }
+
+        // Benchmark orphos meta mode (single-threaded)
+        group.bench_function("orphos_meta", |b| {
+            b.iter_custom(|iters| {
+                let mut total_duration = Duration::new(0, 0);
+                for _ in 0..iters {
+                    let output_file = NamedTempFile::new().unwrap();
+                    let duration = run_orphos_cli_with_mode(
+                        black_box(input_file),
+                        output_file.path().to_str().unwrap(),
+                        Some(1),
+                        "meta",
+                    )
+                    .unwrap_or_else(|e| {
+                        eprintln!("orphos-cli meta benchmark failed: {}", e);
+                        Duration::from_secs(0)
+                    });
+                    total_duration += duration;
+                }
+                total_duration
+            });
+        });
+
+        group.finish();
+    }
+}
+
 criterion_group!(
     name = benches;
     config = configure_criterion();
     targets = benchmark_single_threaded,
     // benchmark_multi_threaded,
-    benchmark_scaling_analysis
+    benchmark_scaling_analysis,
+    benchmark_meta_mode_single_threaded
 );
 criterion_main!(benches);

@@ -29,12 +29,12 @@ pub fn write_gff_format<W: Write>(
         "# Model Data: version=Orphos.v{};run_type={};model=\"{}\";gc_cont={:.2};transl_table={};uses_sd={}",
         VERSION,
         if results.metagenomic_model.is_some() {
-            "Meta"
+            "Metagenomic"
         } else {
             "Single"
         },
         results.metagenomic_model.as_deref().unwrap_or("Ab initio"),
-        results.sequence_info.gc_content * 100.0,
+        results.training_used.gc_content * 100.0,
         results.training_used.translation_table,
         if results.training_used.uses_shine_dalgarno {
             1
@@ -50,6 +50,12 @@ pub fn write_gff_format<W: Write>(
             Strand::Unknown => '.',
         };
 
+        // Use display_score if available (from re-scoring in meta mode),
+        // otherwise fall back to the original total score
+        let column6_score = gene
+            .display_score
+            .unwrap_or(gene.score.coding_score + gene.score.start_score);
+
         writeln!(
             writer,
             "{}\tOrphos_v{}\tCDS\t{}\t{}\t{:.1}\t{}\t0\t{};{};",
@@ -57,7 +63,7 @@ pub fn write_gff_format<W: Write>(
             VERSION,
             gene.coordinates.begin,
             gene.coordinates.end,
-            gene.score.coding_score + gene.score.start_score,
+            column6_score,
             strand_char,
             gene.annotation,
             gene.score
@@ -113,6 +119,7 @@ mod tests {
                 0.42,
             )
             .with_rbs("AGGAG".to_string(), "5".to_string()),
+            display_score: None,
         };
 
         let gene2 = Gene {
@@ -139,6 +146,7 @@ mod tests {
                 StartType::Gtg,
                 0.38,
             ),
+            display_score: None,
         };
 
         OrphosResults {

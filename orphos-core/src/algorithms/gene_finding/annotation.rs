@@ -3,7 +3,7 @@ use bio::bio_types::strand::Strand;
 use crate::{
     constants::{MAX_CONFIDENCE_SCORE, RBS_DESCRIPTIONS},
     sequence::mer_text,
-    types::{Gene, GeneAnnotation, GeneScore, Node, StartType, Training},
+    types::{CodonType, Gene, GeneAnnotation, GeneScore, Node, StartType, Training},
 };
 
 /// Record gene annotation and score.
@@ -125,6 +125,48 @@ fn calculate_confidence(score: f64, start_weight: f64) -> f64 {
     }
 }
 
+/// Update gene scores from re-scored nodes.
+///
+/// This function is used in metagenomic mode to update gene scores after the final
+/// re-scoring with the best model. It finds the corresponding start node by matching
+/// the gene's begin/end positions and strand, then updates the score fields.
+///
+/// # Arguments
+/// * `genes` - Mutable slice of genes to update
+/// * `nodes` - Slice of re-scored nodes
+/// * `training` - Training parameters for confidence calculation
+pub fn update_gene_scores_from_nodes(genes: &mut [Gene], nodes: &[Node], training: &Training) {
+    for gene in genes.iter_mut() {
+        // Find the start node by matching position and strand
+        // For forward strand: start_node.index + 1 == gene.begin
+        // For reverse strand: start_node.index + 1 == gene.end
+        let target_pos = if gene.coordinates.strand == Strand::Forward {
+            gene.coordinates.begin.saturating_sub(1)
+        } else {
+            gene.coordinates.end.saturating_sub(1)
+        };
+
+        if let Some(start_node) = nodes.iter().find(|n| {
+            n.position.index == target_pos
+                && n.position.strand == gene.coordinates.strand
+                && n.position.codon_type != CodonType::Stop
+        }) {
+            let total_score = start_node.scores.coding_score + start_node.scores.start_score;
+            let confidence = calculate_confidence(total_score, training.start_weight_factor);
+
+            gene.score = GeneScore {
+                confidence,
+                total_score,
+                coding_score: start_node.scores.coding_score,
+                start_score: start_node.scores.start_score,
+                ribosome_binding_score: start_node.scores.ribosome_binding_score,
+                upstream_score: start_node.scores.upstream_score,
+                type_score: start_node.scores.type_score,
+            };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +228,7 @@ mod tests {
             },
             score: GeneScore::default(),
             annotation: GeneAnnotation::default(),
+            display_score: None,
         }
     }
 

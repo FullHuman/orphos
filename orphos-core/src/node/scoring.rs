@@ -381,8 +381,8 @@ fn apply_penalties_and_bonuses(
             {
                 node.scores.start_score -= params.start_weight_factor;
             } else {
-                let penalty =
-                    10.31f64.mul_add(-(context.encoded_sequence.sequence_length as f64), 0.004);
+                // C: nod[i].sscore -= (10.31 - 0.004*slen);
+                let penalty = 10.31 - 0.004 * context.encoded_sequence.sequence_length as f64;
                 node.scores.start_score -= penalty;
             }
         } else if context.is_meta

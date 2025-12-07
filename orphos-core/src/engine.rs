@@ -10,7 +10,7 @@ use crate::metagenomic::bins;
 use crate::metagenomic::get_preset_training_ref;
 use crate::node::{
     add_nodes, calculate_dicodon_gene, raw_coding_score, rbs_score, record_gc_bias,
-    record_overlapping_starts, score_nodes, sort_nodes_by_position,
+    record_overlapping_starts, reset_node_scores, score_nodes, sort_nodes_by_position,
 };
 use crate::results::{OrphosResults, SequenceInfo};
 use crate::sequence::calc_most_gc_frame;
@@ -20,7 +20,8 @@ use crate::training::non_sd_training::train_starts_nonsd;
 use crate::training::sd_training::train_starts_sd;
 use crate::training::should_use_sd;
 use crate::types::Gene;
-use crate::types::{OrphosError, Training};
+use crate::types::{CodonType, Node, OrphosError, Training};
+use bio::bio_types::strand::Strand;
 
 /// Marker trait for Orphos training state.
 ///
@@ -471,7 +472,7 @@ impl TrainedOrphos {
     fn find_genes_meta(
         &self,
         encoded_sequence: &EncodedSequence,
-    ) -> Result<Vec<Gene>, OrphosError> {
+    ) -> Result<(Vec<Gene>, usize), OrphosError> {
         if !self.config.quiet {
             eprintln!("Request: Metagenomic, Phase: Gene Finding");
         }
@@ -492,33 +493,35 @@ impl TrainedOrphos {
         for (i, _bin) in bins().iter().enumerate() {
             let preset_training = get_preset_training_ref(i).unwrap();
             if i == 0
-                || preset_training.translation_table != get_preset_training_ref(i - 1).unwrap().translation_table
+                || preset_training.translation_table
+                    != get_preset_training_ref(i - 1).unwrap().translation_table
             {
                 let _num_nodes = add_nodes(
                     encoded_sequence,
                     &mut nodes,
                     self.config.closed_ends,
-                    &preset_training,
+                    preset_training,
                 )?;
                 sort_nodes_by_position(&mut nodes);
             }
             if preset_training.gc_content < low || preset_training.gc_content > high {
                 continue;
             }
+            reset_node_scores(&mut nodes);
             score_nodes(
                 encoded_sequence,
                 &mut nodes,
-                &preset_training,
+                preset_training,
                 self.config.closed_ends,
                 true,
             )?;
-            record_overlapping_starts(&mut nodes, &preset_training, true);
-            let gene_path = predict_genes(&mut nodes, &preset_training, true);
+            record_overlapping_starts(&mut nodes, preset_training, true);
+            let gene_path = predict_genes(&mut nodes, preset_training, true);
             if nodes.get(gene_path.unwrap()).unwrap().scores.total_score > max_score {
                 max_phase = i;
                 max_score = nodes.get(gene_path.unwrap()).unwrap().scores.total_score;
-                eliminate_bad_genes(&mut nodes, gene_path, &preset_training);
-                genes = GeneBuilder::from_nodes(&nodes, gene_path.unwrap(), &preset_training, 1)
+                eliminate_bad_genes(&mut nodes, gene_path, preset_training);
+                genes = GeneBuilder::from_nodes(&nodes, gene_path.unwrap(), preset_training, 1)
                     .with_tweaked_starts()
                     .with_annotations()
                     .build();
@@ -526,21 +529,48 @@ impl TrainedOrphos {
             // Recover the nodes for the best of the runs.
         }
         nodes.clear();
+        let best_training = get_preset_training_ref(max_phase).unwrap();
         let _ = add_nodes(
             encoded_sequence,
             &mut nodes,
             self.config.closed_ends,
-            &get_preset_training_ref(max_phase).unwrap(),
+            best_training,
         )?;
         sort_nodes_by_position(&mut nodes);
         score_nodes(
             encoded_sequence,
             &mut nodes,
-            &get_preset_training_ref(max_phase).unwrap(),
+            best_training,
             self.config.closed_ends,
             true,
         )?;
-        Ok(genes)
+        // Update display_score from re-scored nodes for GFF column 6
+        // This matches Prodigal's behavior where column 6 uses re-scored values
+        // but the attribute scores stay from the original scoring during the loop
+        update_display_scores(&mut genes, &nodes);
+        Ok((genes, max_phase))
+    }
+}
+
+/// Update gene display_score from re-scored nodes for GFF column 6 output.
+/// Matches Prodigal's behavior where column 6 uses re-scored values.
+fn update_display_scores(genes: &mut [Gene], nodes: &[Node]) {
+    for gene in genes.iter_mut() {
+        // Find the start node by matching position and strand
+        let target_pos = if gene.coordinates.strand == Strand::Forward {
+            gene.coordinates.begin.saturating_sub(1)
+        } else {
+            gene.coordinates.end.saturating_sub(1)
+        };
+
+        if let Some(start_node) = nodes.iter().find(|n| {
+            n.position.index == target_pos
+                && n.position.strand == gene.coordinates.strand
+                && n.position.codon_type != CodonType::Stop
+        }) {
+            gene.display_score =
+                Some(start_node.scores.coding_score + start_node.scores.start_score);
+        }
     }
 }
 
@@ -785,15 +815,29 @@ impl OrphosAnalyzer {
         } else {
             untrained_orphos.train_single_genome(&encoded_sequence)?
         };
-        let genes = if self.config.metagenomic {
-            trained_orphos.find_genes_meta(&encoded_sequence)?
+        let (genes, metagenomic_model, best_training) = if self.config.metagenomic {
+            let (genes, best_phase) = trained_orphos.find_genes_meta(&encoded_sequence)?;
+            let bin = &bins()[best_phase];
+            let training = get_preset_training_ref(best_phase).unwrap();
+            let model_desc = format!(
+                "{}|{}|{}|{:.1}|{}|{}",
+                bin.id,
+                bin.name,
+                bin.domain,
+                bin.gc_percent,
+                training.translation_table,
+                if training.uses_shine_dalgarno { 1 } else { 0 }
+            );
+            (genes, Some(model_desc), training.clone())
         } else {
-            trained_orphos.find_genes_single(&encoded_sequence)?
+            let genes = trained_orphos.find_genes_single(&encoded_sequence)?;
+            let training = trained_orphos.training.clone().unwrap_or_default();
+            (genes, None, training)
         };
 
         Ok(OrphosResults {
             genes: genes.clone(),
-            training_used: trained_orphos.training.unwrap_or_default(),
+            training_used: best_training,
             sequence_info: SequenceInfo {
                 length: sequence_length,
                 gc_content: encoded_sequence.gc_content,
@@ -801,11 +845,7 @@ impl OrphosAnalyzer {
                 header,
                 description,
             },
-            metagenomic_model: if self.config.metagenomic {
-                Some("Best".to_string())
-            } else {
-                None
-            },
+            metagenomic_model,
         })
     }
 
