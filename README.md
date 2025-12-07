@@ -197,4 +197,4 @@ This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) 
 
 ## 🙏 Acknowledgments
 
-This project is inspired by the original [Prodigal](https://github.com/hyattpd/Prodigal) by Doug Hyatt.
+This project is based on the original [Prodigal](https://github.com/hyattpd/Prodigal) by Doug Hyatt ([license](https://github.com/hyattpd/Prodigal/blob/GoogleImport/LICENSE)).
