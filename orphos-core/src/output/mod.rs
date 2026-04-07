@@ -9,6 +9,7 @@
 //! - **GFF3**: General Feature Format version 3
 //! - **GCA**: Gene coordinate annotation (tabular)
 //! - **SCO**: Simple coordinate output
+//! - **BED6**: Browser Extensible Data format (genome browser compatible)
 //!
 //! ## Examples
 //!
@@ -50,6 +51,7 @@ use crate::{OrphosError, config::OutputFormat, results::OrphosResults};
 use std::io::Write;
 
 mod formats {
+    pub mod bed;
     pub mod gbk;
     pub mod gca;
     pub mod gff;
@@ -57,7 +59,8 @@ mod formats {
 }
 
 use formats::{
-    gbk::write_gbk_format, gca::write_gca_format, gff::write_gff_format, sco::write_sco_format,
+    bed::write_bed_format, gbk::write_gbk_format, gca::write_gca_format, gff::write_gff_format,
+    sco::write_sco_format,
 };
 
 /// Writes gene prediction results in the specified format.
@@ -101,6 +104,7 @@ pub fn write_results<W: Write>(
         OutputFormat::Gff => write_gff_format(writer, results),
         OutputFormat::Sco => write_sco_format(writer, results),
         OutputFormat::Gca => write_gca_format(writer, results),
+        OutputFormat::Bed => write_bed_format(writer, results),
     }
 }
 
@@ -202,6 +206,19 @@ mod tests {
     }
 
     #[test]
+    fn test_write_results_bed_format() {
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+        let results = create_test_results();
+
+        let result = write_results(&mut cursor, &results, OutputFormat::Bed);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("test_seq\t99\t300\ttest_seq_1\t955\t+"));
+    }
+
+    #[test]
     fn test_write_results_format_consistency() {
         let results = create_test_results();
         let formats = vec![
@@ -209,6 +226,7 @@ mod tests {
             OutputFormat::Gff,
             OutputFormat::Sco,
             OutputFormat::Gca,
+            OutputFormat::Bed,
         ];
 
         for format in formats {
@@ -244,6 +262,7 @@ mod tests {
             OutputFormat::Gff,
             OutputFormat::Sco,
             OutputFormat::Gca,
+            OutputFormat::Bed,
         ];
 
         for format in formats {

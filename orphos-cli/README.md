@@ -13,7 +13,7 @@ Command-line interface for Orphos, a fast, parallel Rust implementation of Prodi
 - 💾 **Memory Efficient**: Optimized for large genomes and metagenomic assemblies
 - 🔄 **Compatible**: Output format compatible with original Prodigal
 - 🌍 **Cross-Platform**: Works on Linux, macOS, and Windows
-- 📊 **Multiple Output Formats**: GenBank, GFF3, SCO, and GCA formats
+- 📊 **Multiple Output Formats**: GenBank, GFF3, SCO, GCA, and BED6 formats
 - 🧬 **Flexible Modes**: Single genome and metagenomic analysis modes
 
 ## Installation
@@ -89,7 +89,7 @@ cat genome.fasta | orphos > genes.gbk
 
 | Option | Short | Long | Default | Description |
 |--------|-------|------|---------|-------------|
-| Format | `-f` | `--format` | `gbk` | Output format: `gbk`, `gff`, `sco`, `gca` |
+| Format | `-f` | `--format` | `gbk` | Output format: `gbk`, `gff`, `sco`, `gca`, `bed` |
 
 ### Analysis Options
 
@@ -141,6 +141,15 @@ Compact coordinate format.
 
 ```bash
 orphos -i genome.fasta -f gca -o genes.gca
+```
+
+### Browser Extensible Data (bed)
+
+BED6 output for genome browsers and BED tooling.
+Coordinates follow BED semantics: start is 0-based and end is exclusive.
+
+```bash
+orphos -i genome.fasta -f bed -o genes.bed
 ```
 
 ## Analysis Modes

@@ -9,6 +9,7 @@
 /// - **GFF**: General Feature Format version 3 (widely supported)
 /// - **GCA**: Gene coordinate annotation (simple tabular format)
 /// - **SCO**: Simple coordinate output (minimal format)
+/// - **BED**: Browser Extensible Data format (genome browser friendly)
 ///
 /// # Examples
 ///
@@ -45,6 +46,12 @@ pub enum OutputFormat {
     /// Standard genome annotation format supported by most bioinformatics tools.
     /// Includes gene coordinates, scores, and attributes.
     Gff,
+
+    /// Browser Extensible Data format (BED6).
+    ///
+    /// Tab-delimited format with 0-based, half-open coordinates:
+    /// chrom, chromStart, chromEnd, name, score, strand.
+    Bed,
 }
 
 /// Configuration settings for Orphos gene prediction analysis.

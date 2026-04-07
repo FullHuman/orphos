@@ -24,21 +24,45 @@ fn cli_help_snapshot() {
 // Golden snapshot for GFF output (captures only first N lines for stability)
 #[test]
 fn small_gff_output_snapshot() {
-    let input_path = "tests/data/ecoli.fasta"; // existing fixture
+    assert_format_head_snapshot("gff", "ecoli_gff_head", 25);
+}
+
+#[test]
+fn small_gbk_output_snapshot() {
+    assert_format_head_snapshot("gbk", "ecoli_gbk_head", 25);
+}
+
+#[test]
+fn small_sco_output_snapshot() {
+    assert_format_head_snapshot("sco", "ecoli_sco_head", 25);
+}
+
+#[test]
+fn small_gca_output_snapshot() {
+    assert_format_head_snapshot("gca", "ecoli_gca_head", 25);
+}
+
+#[test]
+fn small_bed_output_snapshot() {
+    assert_format_head_snapshot("bed", "ecoli_bed_head", 25);
+}
+
+fn assert_format_head_snapshot(format: &str, snapshot_name: &str, max_lines: usize) {
+    let input_path = "tests/data/ecoli.fasta";
     if !std::path::Path::new(input_path).exists() {
         eprintln!("Skipping: fixture missing");
         return;
     }
+
     let out_tmp = NamedTempFile::new().unwrap();
     run_orphos(
         input_path,
         out_tmp.path().to_str().unwrap(),
-        "gff",
+        format,
         "single",
     )
     .unwrap();
     let raw = fs::read_to_string(out_tmp.path()).unwrap();
-    // Take only first 25 lines to keep snapshot concise
-    let head: String = raw.lines().take(25).collect::<Vec<_>>().join("\n");
-    assert_snapshot!("ecoli_gff_head", head);
+    let head: String = raw.lines().take(max_lines).collect::<Vec<_>>().join("\n");
+    assert_snapshot!(snapshot_name, head);
 }

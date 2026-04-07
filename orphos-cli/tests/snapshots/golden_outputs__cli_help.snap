@@ -1,5 +1,6 @@
 ---
 source: orphos-cli/tests/golden_outputs.rs
+assertion_line: 21
 expression: normalized
 ---
 Prokaryotic gene finding algorithm
@@ -9,7 +10,7 @@ Usage: orphos [OPTIONS]
 Options:
   -i, --input <FILE>               Input FASTA file (default: stdin)
   -o, --output <FILE>              Output file (default: stdout)
-  -f, --format <FORMAT>            Output format: gbk, gff, sco, gca [default: gbk]
+  -f, --format <FORMAT>            Output format: gbk, gff, sco, gca, bed [default: gbk]
   -p, --mode <MODE>                Analysis mode: single or meta [default: single]
   -c, --closed <closed>            Closed ends (no genes off edges)
   -m, --mask <mask>                Mask runs of N's

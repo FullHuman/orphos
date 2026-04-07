@@ -22,7 +22,7 @@
 //!
 //! - `-i, --input <FILE>`: Input FASTA file (default: stdin)
 //! - `-o, --output <FILE>`: Output file (default: stdout)
-//! - `-f, --format <FORMAT>`: Output format: gbk, gff, sco, gca (default: gbk)
+//! - `-f, --format <FORMAT>`: Output format: gbk, gff, sco, gca, bed (default: gbk)
 //! - `-p, --mode <MODE>`: Analysis mode: single or meta (default: single)
 //! - `-c, --closed`: Closed ends (no genes off edges)
 //! - `-m, --mask`: Mask runs of N's
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('f')
                 .long("format")
                 .value_name("FORMAT")
-                .help("Output format: gbk, gff, sco, gca")
+                .help("Output format: gbk, gff, sco, gca, bed")
                 .default_value("gbk"),
         )
         .arg(
@@ -153,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "gff" => OutputFormat::Gff,
         "sco" => OutputFormat::Sco,
         "gca" => OutputFormat::Gca,
+        "bed" => OutputFormat::Bed,
         _ => return Err("Invalid output format".into()),
     };
 

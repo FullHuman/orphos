@@ -1,0 +1,30 @@
+---
+source: orphos-cli/tests/golden_outputs.rs
+assertion_line: 67
+expression: head
+---
+     CDS             4..99
+                     /locus_tag="NC_000913.3:1-4641652_1"
+                     /confidence=56.57
+     CDS             338..2800
+                     /locus_tag="NC_000913.3:1-4641652_2"
+                     /confidence=99.99
+     CDS             2802..3734
+                     /locus_tag="NC_000913.3:1-4641652_3"
+                     /confidence=100.00
+     CDS             3735..5021
+                     /locus_tag="NC_000913.3:1-4641652_4"
+                     /confidence=99.99
+     CDS             5235..5531
+                     /locus_tag="NC_000913.3:1-4641652_5"
+                     /confidence=86.81
+     CDS             5684..6460
+                     /locus_tag="NC_000913.3:1-4641652_6"
+                     /confidence=100.00
+     CDS             6530..7960
+                     /locus_tag="NC_000913.3:1-4641652_7"
+                     /confidence=100.00
+     CDS             8239..9192
+                     /locus_tag="NC_000913.3:1-4641652_8"
+                     /confidence=100.00
+     CDS             9307..9894
