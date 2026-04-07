@@ -24,8 +24,8 @@ pub fn train_starts_sd(
     let mut ribosome_binding_site_background = [0.0; NUM_RBS_WEIGHTS];
 
     training.start_type_weights = [0.0; NUM_CODON_TYPES];
-    training.rbs_weights = Box::new([0.0; NUM_RBS_WEIGHTS]);
-    training.upstream_composition = Box::new([[0.0; NUM_BASES]; UPSTREAM_POSITIONS]);
+    *training.rbs_weights = [0.0; NUM_RBS_WEIGHTS];
+    *training.upstream_composition = [[0.0; NUM_BASES]; UPSTREAM_POSITIONS];
 
     let mut total_sum = 0.0;
     for node in nodes {

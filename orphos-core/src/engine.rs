@@ -517,11 +517,14 @@ impl TrainedOrphos {
             )?;
             record_overlapping_starts(&mut nodes, preset_training, true);
             let gene_path = predict_genes(&mut nodes, preset_training, true);
-            if nodes.get(gene_path.unwrap()).unwrap().scores.total_score > max_score {
+            if let Some(path) = gene_path
+                && let Some(node) = nodes.get(path)
+                && node.scores.total_score > max_score
+            {
                 max_phase = i;
-                max_score = nodes.get(gene_path.unwrap()).unwrap().scores.total_score;
+                max_score = node.scores.total_score;
                 eliminate_bad_genes(&mut nodes, gene_path, preset_training);
-                genes = GeneBuilder::from_nodes(&nodes, gene_path.unwrap(), preset_training, 1)
+                genes = GeneBuilder::from_nodes(&nodes, path, preset_training, 1)
                     .with_tweaked_starts()
                     .with_annotations()
                     .build();
@@ -1154,7 +1157,12 @@ mod tests {
 
         let analysis = result.unwrap();
         assert!(analysis.metagenomic_model.is_some());
-        assert_eq!(analysis.metagenomic_model.unwrap(), "Best");
+        // Metagenomic model string format: "id|name|domain|gc_percent|transl_table|uses_sd"
+        let model = analysis.metagenomic_model.unwrap();
+        assert!(
+            model.contains("|"),
+            "Expected metagenomic model description with | separator"
+        );
     }
 
     // #[test]
@@ -1221,7 +1229,8 @@ mod tests {
         assert!(result.is_ok());
 
         let results = result.unwrap();
-        assert!(results.is_empty()); // Metagenomic mode returns empty for now
+        assert_eq!(results.len(), 1); // One result per sequence in the file
+        assert!(results[0].genes.is_empty()); // But no genes found in 4bp sequence
 
         let _ = fs::remove_file(temp_file);
     }

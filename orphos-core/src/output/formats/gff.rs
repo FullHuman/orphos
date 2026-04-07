@@ -91,6 +91,7 @@ mod tests {
         let training = Training {
             translation_table: 11,
             uses_shine_dalgarno: true,
+            gc_content: 0.45,
             ..Default::default()
         };
 

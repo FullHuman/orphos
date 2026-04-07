@@ -25,8 +25,8 @@ pub fn train_starts_nonsd(
     let weight_factor = training.start_weight_factor;
 
     training.start_type_weights = [0.0; NUM_CODON_TYPES];
-    training.upstream_composition = Box::new([[0.0; NUM_BASES]; UPSTREAM_POSITIONS]);
-    training.motif_weights = Box::new([[[0.0; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES]);
+    *training.upstream_composition = [[0.0; NUM_BASES]; UPSTREAM_POSITIONS];
+    *training.motif_weights = [[[0.0; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
     training.no_motif_weight = 0.0;
 
     let mut total_starts = 0.0;
