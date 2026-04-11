@@ -5,6 +5,8 @@
   "scripts": {
     "build": "wasm-pack build --target web --out-dir www/pkg",
     "build:release": "wasm-pack build --target web --release --out-dir www/pkg",
+    "build:node": "wasm-pack build --target nodejs --release --scope full-human --out-name orphos --out-dir pkg-node && npm run fix:node-package-name",
+    "fix:node-package-name": "node -e \"const fs=require('fs');const p='pkg-node/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.name='@full-human/orphos';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\\n');\"",
     "serve": "python3 -m http.server 8080 --directory www",
     "start": "npm run build && npm run serve",
     "clean": "rm -rf www/pkg target"
