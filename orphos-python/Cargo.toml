@@ -1,13 +1,13 @@
 [package]
-name = "prodigal-python"
-version = "0.1.0"
+name = "orphos-python"
+version = "0.2.0"
 edition = "2021"
 description = "Python bindings for Orphos gene finder"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/FullHuman/orphos"
 
 [lib]
-name = "prodigal"
+name = "orphos_python"
 crate-type = ["cdylib"]
 
 [dependencies]

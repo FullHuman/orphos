@@ -1,6 +1,6 @@
 {
   "name": "@fullhuman/orphos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "WebAssembly web interface for Orphos gene finder",
   "scripts": {
     "build": "wasm-pack build --target web --out-dir www/pkg",
@@ -16,6 +16,6 @@
     "orphos"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "devDependencies": {}
 }
