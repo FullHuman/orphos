@@ -97,9 +97,12 @@ cat genome.fasta | orphos > genes.gbk
 |--------|-------|------|---------|-------------|
 | Mode | `-p` | `--mode` | `single` | Analysis mode: `single` or `meta` |
 | Closed ends | `-c` | `--closed` | false | No genes off edges (for complete genomes) |
+| Circular topology | `-r` | `--circular` | false | Enable wraparound genes across sequence breakpoint |
 | Mask N's | `-m` | `--mask` | false | Mask runs of N's |
 | Translation table | `-g` | `--translation-table` | auto | Translation table (1-25) |
 | Training file | `-t` | `--training` | - | Use pre-trained parameters |
+
+`--circular` and `--closed` are mutually exclusive.
 
 ### Other Options
 
@@ -186,11 +189,13 @@ orphos -i metagenome_contigs.fasta -p meta -o genes.gff
 
 ### Complete Circular Genome
 
-For complete circular genomes (chromosomes, plasmids), use the `-c` flag to prevent genes from being called off the edges:
+For complete circular genomes (chromosomes, plasmids), use the `-r` flag to detect genes that span the sequence breakpoint:
 
 ```bash
-orphos -i circular_plasmid.fasta -c -o plasmid.gbk
+orphos -i circular_plasmid.fasta -r -o plasmid.gbk
 ```
+
+In circular mode, wrapped genes are emitted in `gbk` and `gff` outputs. For `bed`, `sco`, and `gca`, wrapped genes are skipped.
 
 ### Custom Translation Table
 

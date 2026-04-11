@@ -13,6 +13,7 @@ Options:
   -f, --format <FORMAT>            Output format: gbk, gff, sco, gca, bed [default: gbk]
   -p, --mode <MODE>                Analysis mode: single or meta [default: single]
   -c, --closed <closed>            Closed ends (no genes off edges)
+  -r, --circular <circular>        Circular topology (allow wraparound genes)
   -m, --mask <mask>                Mask runs of N's
   -q, --quiet <quiet>              Quiet mode
   -t, --training <FILE>            Training file

@@ -24,6 +24,10 @@ pub struct OrphosOptions {
     pub closed_ends: bool,
 
     #[pyo3(get, set)]
+    /// Circular topology - allow genes that wrap sequence end to start
+    pub circular: bool,
+
+    #[pyo3(get, set)]
     /// Mask runs of N's in the sequence
     pub mask_n_runs: bool,
 
@@ -51,6 +55,7 @@ impl OrphosOptions {
         mode="single",
         format="gbk",
         closed_ends=false,
+        circular=false,
         mask_n_runs=false,
         force_non_sd=false,
         translation_table=None,
@@ -61,6 +66,7 @@ impl OrphosOptions {
         mode: &str,
         format: &str,
         closed_ends: bool,
+        circular: bool,
         mask_n_runs: bool,
         force_non_sd: bool,
         translation_table: Option<u8>,
@@ -71,6 +77,7 @@ impl OrphosOptions {
             mode: mode.to_string(),
             format: format.to_string(),
             closed_ends,
+            circular,
             mask_n_runs,
             force_non_sd,
             translation_table,
@@ -81,8 +88,8 @@ impl OrphosOptions {
 
     fn __repr__(&self) -> String {
         format!(
-            "OrphosOptions(mode='{}', format='{}', closed_ends={}, mask_n_runs={}, force_non_sd={}, translation_table={:?}, num_threads={:?}, quiet={})",
-            self.mode, self.format, self.closed_ends, self.mask_n_runs,
+            "OrphosOptions(mode='{}', format='{}', closed_ends={}, circular={}, mask_n_runs={}, force_non_sd={}, translation_table={:?}, num_threads={:?}, quiet={})",
+            self.mode, self.format, self.closed_ends, self.circular, self.mask_n_runs,
             self.force_non_sd, self.translation_table, self.num_threads, self.quiet
         )
     }
@@ -141,6 +148,12 @@ fn parse_fasta_string(content: &str) -> PyResult<Vec<(String, Option<String>, Ve
 
 /// Convert OrphosOptions to OrphosConfig
 fn options_to_config(options: &OrphosOptions) -> PyResult<OrphosConfig> {
+    if options.circular && options.closed_ends {
+        return Err(PyValueError::new_err(
+            "Invalid options: circular and closed_ends cannot both be true",
+        ));
+    }
+
     // Validate translation table
     if let Some(tt) = options.translation_table {
         if !(1..=25).contains(&tt) || tt == 7 || tt == 8 || (17..=20).contains(&tt) {
@@ -173,6 +186,7 @@ fn options_to_config(options: &OrphosOptions) -> PyResult<OrphosConfig> {
     Ok(OrphosConfig {
         metagenomic: options.mode == "meta",
         closed_ends: options.closed_ends,
+        circular: options.circular,
         mask_n_runs: options.mask_n_runs,
         force_non_sd: options.force_non_sd,
         quiet: options.quiet,
@@ -204,6 +218,7 @@ fn analyze_sequence(fasta_content: &str, options: Option<OrphosOptions>) -> PyRe
         mode: "single".to_string(),
         format: "gbk".to_string(),
         closed_ends: false,
+        circular: false,
         mask_n_runs: false,
         force_non_sd: false,
         translation_table: None,

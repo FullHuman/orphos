@@ -106,10 +106,13 @@ options = orphos.OrphosOptions(
     mode="meta",           # Use metagenomic mode
     format="gff",          # Output in GFF format
     closed_ends=True,      # Don't allow genes off edges
+    circular=False,        # Set True for circular topology
     translation_table=11   # Use translation table 11
 )
 result = orphos.analyze_file("genome.fasta", options)
 ```
+
+For circular chromosomes/plasmids, enable wraparound detection with `--circular` in CLI or `circular=True` in Python options.
 
 ### Rust Library (orphos-core)
 

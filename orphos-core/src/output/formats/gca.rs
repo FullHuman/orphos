@@ -10,6 +10,11 @@ pub fn write_gca_format<W: Write>(
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
     for (i, gene) in results.genes.iter().enumerate() {
+        if gene.coordinates.begin > gene.coordinates.end {
+            // GCA cannot encode wrapped circular coordinates.
+            continue;
+        }
+
         writeln!(writer, ">{}_{}", results.sequence_info.header, i + 1)?;
         writeln!(
             writer,
@@ -209,5 +214,36 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert_eq!(output, ">unknown_strand_1\n50\t150\t?\n");
+    }
+
+    #[test]
+    fn test_write_gca_format_skips_wrapped_gene() {
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+
+        let results = OrphosResults {
+            sequence_info: SequenceInfo {
+                header: "wrapped_seq".to_string(),
+                length: 1000,
+                description: None,
+                gc_content: 0.0,
+                num_genes: 1,
+            },
+            genes: vec![Gene {
+                coordinates: GeneCoordinates {
+                    begin: 900,
+                    end: 100,
+                    strand: Strand::Forward,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            training_used: Training::default(),
+            metagenomic_model: None,
+        };
+
+        write_gca_format(&mut cursor, &results).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+        assert_eq!(output, "");
     }
 }

@@ -42,6 +42,7 @@ options = orphos.OrphosOptions(
     mode="meta",           # Use metagenomic mode
     format="gff",          # Output in GFF format
     closed_ends=True,      # Don't allow genes off edges
+    circular=False,        # Set True for circular wraparound detection
     translation_table=11   # Use translation table 11
 )
 result = orphos.analyze_file("genome.fasta", options)
@@ -77,11 +78,14 @@ Configuration options for gene prediction.
 - `mode` (str): "single" for single genome mode, "meta" for metagenomic mode (default: "single")
 - `format` (str): Output format - "gbk", "gff", "sco", or "gca" (default: "gbk")
 - `closed_ends` (bool): Don't allow genes to run off edges (default: False)
+- `circular` (bool): Detect genes that wrap sequence end to start (default: False)
 - `mask_n_runs` (bool): Mask runs of N's in the sequence (default: False)
 - `force_non_sd` (bool): Force non-Shine-Dalgarno model (default: False)
 - `translation_table` (int, optional): Translation table 1-25 (excluding 7, 8, 17-20)
 - `num_threads` (int, optional): Number of threads to use
 - `quiet` (bool): Suppress informational output (default: True)
+
+`circular=True` cannot be combined with `closed_ends=True`.
 
 ### `OrphosResult`
 

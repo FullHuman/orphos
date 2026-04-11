@@ -21,17 +21,24 @@ struct StrandProcessingContext {
     minimum_distances: ReadingFrameArray<usize>,
     sequence_length: usize,
     closed: bool,
+    circular: bool,
 }
 
 impl StrandProcessingContext {
     /// Create a new processing context with initialized arrays
-    fn new(sequence_length: usize, sequence_length_mod: usize, closed: bool) -> Self {
+    fn new(
+        sequence_length: usize,
+        sequence_length_mod: usize,
+        closed: bool,
+        circular: bool,
+    ) -> Self {
         let mut context = Self {
             last_stop_positions: ReadingFrameArray::default(),
             has_start_codon: ReadingFrameArray::default(),
             minimum_distances: ReadingFrameArray::default(),
             sequence_length,
             closed,
+            circular,
         };
 
         context.initialize_arrays(sequence_length_mod);
@@ -59,6 +66,31 @@ impl StrandProcessingContext {
             }
         }
     }
+
+    fn seed_circular_stops(&mut self, encoded_sequence: &[u8], training: &Training) {
+        if !self.circular || self.sequence_length < CODON_LENGTH {
+            return;
+        }
+
+        let mut first_stop_per_frame: [Option<usize>; READING_FRAMES] = [None; READING_FRAMES];
+        let scanning_start_position = self.sequence_length - CODON_LENGTH;
+
+        for position_index in 0..=scanning_start_position {
+            if is_stop(encoded_sequence, position_index, training) {
+                let frame = position_index % READING_FRAMES;
+                if first_stop_per_frame[frame].is_none() {
+                    first_stop_per_frame[frame] = Some(position_index);
+                }
+            }
+        }
+
+        for (frame, first_stop) in first_stop_per_frame.iter().enumerate() {
+            if let Some(stop_position) = first_stop {
+                self.last_stop_positions[frame] = *stop_position;
+                self.minimum_distances[frame] = MINIMUM_GENE_LENGTH;
+            }
+        }
+    }
 }
 
 /// Add nodes for start and stop codons in both directions
@@ -70,6 +102,7 @@ impl StrandProcessingContext {
 /// * `encoded_sequence` - The complete encoded sequence data
 /// * `nodes` - Vector to store the created nodes
 /// * `closed` - Whether to treat sequence as circular/closed
+/// * `circular` - Whether to treat sequence topology as circular for wraparound genes
 /// * `training` - Training data for scoring parameters
 ///
 /// # Returns
@@ -78,6 +111,7 @@ pub fn add_nodes(
     encoded_sequence: &EncodedSequence,
     nodes: &mut Vec<Node>,
     closed: bool,
+    circular: bool,
     training: &Training,
 ) -> Result<usize, OrphosError> {
     let sequence_length = encoded_sequence.sequence_length;
@@ -87,7 +121,9 @@ pub fn add_nodes(
 
     let sequence_length_mod = sequence_length % READING_FRAMES;
 
-    let mut context = StrandProcessingContext::new(sequence_length, sequence_length_mod, closed);
+    let mut context =
+        StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+    context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
     process_forward_strand(
         &encoded_sequence.forward_sequence,
         nodes,
@@ -103,7 +139,9 @@ pub fn add_nodes(
         training,
     );
 
-    let mut context = StrandProcessingContext::new(sequence_length, sequence_length_mod, closed);
+    let mut context =
+        StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+    context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
     process_reverse_strand(
         &encoded_sequence.reverse_complement_sequence,
         nodes,
@@ -166,6 +204,8 @@ fn process_forward_strand(
                 position_index,
                 context.last_stop_positions[reading_frame_index],
                 context.minimum_distances[reading_frame_index],
+                context.sequence_length,
+                context.circular,
                 masks,
             ) {
                 let node = create_start_node(
@@ -180,7 +220,7 @@ fn process_forward_strand(
         } else if is_edge_gene(
             position_index,
             context.last_stop_positions[reading_frame_index],
-            context.closed,
+            context.closed || context.circular,
             masks,
         ) {
             let node = create_edge_node(
@@ -244,6 +284,7 @@ fn process_reverse_strand(
                 context.last_stop_positions[reading_frame_index],
                 context.minimum_distances[reading_frame_index],
                 context.sequence_length,
+                context.circular,
                 masks,
             ) {
                 let node = create_reverse_start_node(
@@ -260,7 +301,7 @@ fn process_reverse_strand(
             position_index,
             context.last_stop_positions[reading_frame_index],
             context.sequence_length,
-            context.closed,
+            context.closed || context.circular,
             masks,
         ) {
             let node = create_reverse_edge_node(
@@ -283,6 +324,10 @@ fn handle_remaining_starts(
     strand: Strand,
     training: &Training,
 ) {
+    if context.circular {
+        return;
+    }
+
     for i in 0..READING_FRAMES {
         if context.has_start_codon[i % READING_FRAMES] {
             let (position_index, stop_value, is_edge) = match strand {
@@ -482,7 +527,7 @@ mod tests {
         let mut nodes = Vec::new();
         let training = create_test_training();
 
-        let result = add_nodes(&encoded_sequence, &mut nodes, true, &training);
+        let result = add_nodes(&encoded_sequence, &mut nodes, true, false, &training);
 
         assert!(result.is_ok());
     }
@@ -494,7 +539,7 @@ mod tests {
         let mut nodes = Vec::new();
         let training = create_test_training();
 
-        let result = add_nodes(&encoded_sequence, &mut nodes, false, &training);
+        let result = add_nodes(&encoded_sequence, &mut nodes, false, false, &training);
 
         assert!(result.is_ok());
     }
@@ -504,8 +549,10 @@ mod tests {
         let sequence_length = 100;
         let sequence_length_mod = 1;
         let closed = false;
+        let circular = false;
 
-        let context = StrandProcessingContext::new(sequence_length, sequence_length_mod, closed);
+        let context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
 
         // Check that arrays were properly initialized
         assert_eq!(context.has_start_codon, [false; READING_FRAMES]);
@@ -523,8 +570,10 @@ mod tests {
         let sequence_length = 10;
         let sequence_length_mod = 0;
         let closed = true;
+        let circular = false;
 
-        let context = StrandProcessingContext::new(sequence_length, sequence_length_mod, closed);
+        let context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
 
         // Check that arrays were properly initialized
         assert_eq!(context.has_start_codon, [false; READING_FRAMES]);
@@ -622,7 +671,7 @@ mod tests {
         let training = create_test_training();
 
         // Create a context with some start codons detected
-        let mut context = StrandProcessingContext::new(sequence.len(), 0, false);
+        let mut context = StrandProcessingContext::new(sequence.len(), 0, false, false);
         context.last_stop_positions = [0, READING_FRAMES, 6];
         context.has_start_codon = [true, false, true];
 
@@ -647,7 +696,7 @@ mod tests {
         let training = create_test_training();
 
         // Create a context with some start codons detected
-        let mut context = StrandProcessingContext::new(sequence.len(), 0, false);
+        let mut context = StrandProcessingContext::new(sequence.len(), 0, false, false);
         context.last_stop_positions = [0, READING_FRAMES, 6];
         context.has_start_codon = [false, true, false];
 
@@ -671,7 +720,7 @@ mod tests {
         let training = create_test_training();
 
         // Create a context with no start codons detected
-        let mut context = StrandProcessingContext::new(sequence.len(), 0, false);
+        let mut context = StrandProcessingContext::new(sequence.len(), 0, false, false);
         context.last_stop_positions = [0, READING_FRAMES, 6];
         context.has_start_codon = [false, false, false];
 
@@ -693,8 +742,48 @@ mod tests {
         let mut nodes = Vec::new();
         let training = create_test_training();
 
-        let result = add_nodes(&encoded_sequence, &mut nodes, false, &training);
+        let result = add_nodes(&encoded_sequence, &mut nodes, false, false, &training);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_add_nodes_circular_detects_wrapped_forward_start() {
+        // Build a sequence with a wrapped forward ORF that clears minimum gene length.
+        let mut sequence = vec![b'C'; 150];
+        sequence[20..23].copy_from_slice(b"TAA");
+        sequence[80..83].copy_from_slice(b"ATG");
+
+        let encoded_sequence = create_test_encoded_sequence(&sequence);
+        let training = create_test_training();
+
+        let mut linear_nodes = Vec::new();
+        let _ = add_nodes(&encoded_sequence, &mut linear_nodes, true, false, &training).unwrap();
+
+        let mut circular_nodes = Vec::new();
+        let _ = add_nodes(
+            &encoded_sequence,
+            &mut circular_nodes,
+            false,
+            true,
+            &training,
+        )
+        .unwrap();
+
+        let has_wrapped_forward_start_linear = linear_nodes.iter().any(|n| {
+            n.position.strand == Strand::Forward
+                && n.position.codon_type != CodonType::Stop
+                && n.position.index == 80
+                && n.position.stop_value == 20
+        });
+        let has_wrapped_forward_start_circular = circular_nodes.iter().any(|n| {
+            n.position.strand == Strand::Forward
+                && n.position.codon_type != CodonType::Stop
+                && n.position.index == 80
+                && n.position.stop_value == 20
+        });
+
+        assert!(!has_wrapped_forward_start_linear);
+        assert!(has_wrapped_forward_start_circular);
     }
 }

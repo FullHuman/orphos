@@ -25,6 +25,7 @@
 //! - `-f, --format <FORMAT>`: Output format: gbk, gff, sco, gca, bed (default: gbk)
 //! - `-p, --mode <MODE>`: Analysis mode: single or meta (default: single)
 //! - `-c, --closed`: Closed ends (no genes off edges)
+//! - `-r, --circular`: Circular topology (allow wraparound genes)
 //! - `-m, --mask`: Mask runs of N's
 //! - `-q, --quiet`: Suppress progress messages
 //! - `-g, --translation-table <TABLE>`: Translation table 1-25 (default: auto)
@@ -47,6 +48,10 @@
 //!
 //! ```bash
 //! orphos-cli -i plasmid.fasta -c -o plasmid.gbk
+//! ```
+//!
+//! ```bash
+//! orphos-cli -i plasmid.fasta -r -o plasmid.gff
 //! ```
 
 use clap::{Arg, Command};
@@ -101,6 +106,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Closed ends (no genes off edges)"),
         )
         .arg(
+            Arg::new("circular")
+                .short('r')
+                .long("circular")
+                .help("Circular topology (allow wraparound genes)"),
+        )
+        .arg(
             Arg::new("mask")
                 .short('m')
                 .long("mask")
@@ -132,11 +143,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = OrphosConfig {
         metagenomic: matches.get_one::<String>("mode").map(|s| s.as_str()) == Some("meta"),
         closed_ends: matches.contains_id("closed"),
+        circular: matches.contains_id("circular"),
         mask_n_runs: matches.contains_id("mask"),
         quiet: matches.contains_id("quiet"),
         // training_file: matches.get_one::<String>("training").cloned(),
         ..Default::default()
     };
+
+    if options.circular && options.closed_ends {
+        return Err("Cannot use --circular together with --closed".into());
+    }
 
     if let Some(tt_str) = matches.get_one::<String>("translation-table") {
         let tt: u8 = tt_str

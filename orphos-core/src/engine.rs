@@ -145,6 +145,12 @@ impl UntrainedOrphos {
     /// # Ok::<(), orphos_core::types::OrphosError>(())
     /// ```
     pub fn with_config(config: OrphosConfig) -> Result<Self, OrphosError> {
+        if config.circular && config.closed_ends {
+            return Err(OrphosError::InvalidSequence(
+                "Invalid configuration: circular and closed_ends cannot both be true".to_string(),
+            ));
+        }
+
         let orphos = Self {
             config,
             training: None,
@@ -233,6 +239,7 @@ impl UntrainedOrphos {
             encoded_sequence,
             &mut nodes,
             self.config.closed_ends,
+            self.config.circular,
             &training,
         )?;
 
@@ -434,6 +441,7 @@ impl TrainedOrphos {
             encoded_sequence,
             &mut nodes,
             self.config.closed_ends,
+            self.config.circular,
             training,
         )?;
 
@@ -500,6 +508,7 @@ impl TrainedOrphos {
                     encoded_sequence,
                     &mut nodes,
                     self.config.closed_ends,
+                    self.config.circular,
                     preset_training,
                 )?;
                 sort_nodes_by_position(&mut nodes);
@@ -537,6 +546,7 @@ impl TrainedOrphos {
             encoded_sequence,
             &mut nodes,
             self.config.closed_ends,
+            self.config.circular,
             best_training,
         )?;
         sort_nodes_by_position(&mut nodes);
@@ -973,6 +983,24 @@ mod tests {
         // Thread configuration might fail depending on system
         // Rayon might handle it gracefully or it might fail
         let _ = result;
+    }
+
+    #[test]
+    fn test_untrained_orphos_with_conflicting_topology_config() {
+        let config = OrphosConfig {
+            circular: true,
+            closed_ends: true,
+            ..OrphosConfig::default()
+        };
+
+        let result = UntrainedOrphos::with_config(config);
+        assert!(result.is_err());
+        if let Err(OrphosError::InvalidSequence(msg)) = result {
+            assert!(msg.contains("circular"));
+            assert!(msg.contains("closed_ends"));
+        } else {
+            panic!("Expected InvalidSequence error");
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub struct WasmOrphosOptions {
     pub mode: String,                  // "single" or "meta"
     pub format: String,                // "gbk", "gff", "sco", "gca"
     pub closed_ends: bool,             // Closed ends (no genes off edges)
+    pub circular: bool,                // Circular topology (allow wraparound genes)
     pub mask_n_runs: bool,             // Mask runs of N's
     pub force_non_sd: bool,            // Force non-Shine-Dalgarno
     pub translation_table: Option<u8>, // Translation table (1-25)
@@ -26,6 +27,7 @@ impl Default for WasmOrphosOptions {
             mode: "single".to_string(),
             format: "gbk".to_string(),
             closed_ends: false,
+            circular: false,
             mask_n_runs: false,
             force_non_sd: false,
             translation_table: None,
@@ -90,6 +92,12 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
     let wasm_options: WasmOrphosOptions =
         serde_wasm_bindgen::from_value(options_js).unwrap_or_default();
 
+    if wasm_options.circular && wasm_options.closed_ends {
+        return Err(JsValue::from_str(
+            "Invalid options: circular and closed_ends cannot both be true",
+        ));
+    }
+
     // Validate translation table
     if let Some(tt) = wasm_options.translation_table {
         if !(1..=25).contains(&tt) || tt == 7 || tt == 8 || (17..=20).contains(&tt) {
@@ -109,6 +117,7 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
     let config = OrphosConfig {
         metagenomic: wasm_options.mode == "meta",
         closed_ends: wasm_options.closed_ends,
+        circular: wasm_options.circular,
         mask_n_runs: wasm_options.mask_n_runs,
         force_non_sd: wasm_options.force_non_sd,
         quiet: true,

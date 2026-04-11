@@ -110,10 +110,18 @@ pub struct OrphosConfig {
     /// Treat sequences as having closed ends (complete genomes).
     ///
     /// When `true`, prevents genes from extending off sequence edges.
-    /// Use for complete, circularized genomes.
+    /// This does not enable wraparound gene detection; use `circular` for that.
     ///
     /// **Default**: `false` (allow edge genes)
     pub closed_ends: bool,
+
+    /// Treat sequences as circular topology for wraparound gene detection.
+    ///
+    /// When `true`, sequence end and start are treated as adjacent so genes
+    /// can span the breakpoint. This is independent from `closed_ends`.
+    ///
+    /// **Default**: `false` (linear topology)
+    pub circular: bool,
 
     /// Mask runs of N characters during analysis.
     ///
@@ -171,6 +179,7 @@ impl Default for OrphosConfig {
         Self {
             metagenomic: false,
             closed_ends: false,
+            circular: false,
             mask_n_runs: false,
             force_non_sd: false,
             quiet: false,

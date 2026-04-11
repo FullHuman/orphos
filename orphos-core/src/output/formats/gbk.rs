@@ -8,12 +8,22 @@ pub fn write_gbk_format<W: Write>(
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
     for (i, gene) in results.genes.iter().enumerate() {
-        writeln!(
-            writer,
-            "     CDS             {}..{}",
-            gene.coordinates.begin + 1, // GenBank uses 1-based coordinates
-            gene.coordinates.end + 1
-        )?;
+        if gene.coordinates.begin > gene.coordinates.end {
+            writeln!(
+                writer,
+                "     CDS             join({}..{},1..{})",
+                gene.coordinates.begin + 1,
+                results.sequence_info.length,
+                gene.coordinates.end + 1
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "     CDS             {}..{}",
+                gene.coordinates.begin + 1, // GenBank uses 1-based coordinates
+                gene.coordinates.end + 1
+            )?;
+        }
         writeln!(
             writer,
             "                     /locus_tag=\"{}_{}\"",
@@ -228,5 +238,40 @@ mod tests {
 
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("/confidence=100.00"));
+    }
+
+    #[test]
+    fn test_write_gbk_format_wrapped_gene_join_notation() {
+        let mut buffer = Vec::new();
+        let gene = Gene {
+            coordinates: GeneCoordinates {
+                begin: 900,
+                end: 100,
+                ..Default::default()
+            },
+            score: GeneScore {
+                confidence: 90.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let results = OrphosResults {
+            genes: vec![gene],
+            sequence_info: SequenceInfo {
+                header: "circular_seq".to_string(),
+                length: 1000,
+                description: None,
+                gc_content: 12.0,
+                num_genes: 1,
+            },
+            training_used: Training::default(),
+            metagenomic_model: None,
+        };
+
+        let result = write_gbk_format(&mut buffer, &results);
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("CDS             join(901..1000,1..101)"));
     }
 }

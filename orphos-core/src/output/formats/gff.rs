@@ -56,18 +56,46 @@ pub fn write_gff_format<W: Write>(
             .display_score
             .unwrap_or(gene.score.coding_score + gene.score.start_score);
 
-        writeln!(
-            writer,
-            "{}\tOrphos_v{}\tCDS\t{}\t{}\t{:.1}\t{}\t0\t{};{};",
-            results.sequence_info.header,
-            VERSION,
-            gene.coordinates.begin,
-            gene.coordinates.end,
-            column6_score,
-            strand_char,
-            gene.annotation,
-            gene.score
-        )?;
+        if gene.coordinates.begin > gene.coordinates.end {
+            // Wrapped circular gene: emit two valid GFF3 CDS segments.
+            writeln!(
+                writer,
+                "{}\tOrphos_v{}\tCDS\t{}\t{}\t{:.1}\t{}\t0\t{};{};circular_wrap=1;part=1/2;",
+                results.sequence_info.header,
+                VERSION,
+                gene.coordinates.begin,
+                results.sequence_info.length,
+                column6_score,
+                strand_char,
+                gene.annotation,
+                gene.score
+            )?;
+            writeln!(
+                writer,
+                "{}\tOrphos_v{}\tCDS\t{}\t{}\t{:.1}\t{}\t0\t{};{};circular_wrap=1;part=2/2;",
+                results.sequence_info.header,
+                VERSION,
+                1,
+                gene.coordinates.end,
+                column6_score,
+                strand_char,
+                gene.annotation,
+                gene.score
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "{}\tOrphos_v{}\tCDS\t{}\t{}\t{:.1}\t{}\t0\t{};{};",
+                results.sequence_info.header,
+                VERSION,
+                gene.coordinates.begin,
+                gene.coordinates.end,
+                column6_score,
+                strand_char,
+                gene.annotation,
+                gene.score
+            )?;
+        }
     }
     Ok(())
 }
@@ -271,5 +299,37 @@ mod tests {
         assert!(gff_output.contains("# Sequence Data:"));
         assert!(gff_output.contains("# Model Data:"));
         assert!(!gff_output.contains("\tCDS\t"));
+    }
+
+    #[test]
+    fn test_gff_wrapped_gene_outputs_two_segments() {
+        let mut results = create_test_results();
+        results.sequence_info.length = 1000;
+        results.genes = vec![Gene {
+            coordinates: GeneCoordinates {
+                begin: 900,
+                end: 100,
+                strand: Strand::Forward,
+                ..Default::default()
+            },
+            annotation: GeneAnnotation::new(
+                "wrapped_gene".to_string(),
+                false,
+                false,
+                StartType::Atg,
+                0.5,
+            ),
+            score: GeneScore::default(),
+            display_score: None,
+        }];
+
+        let mut output = Vec::new();
+        write_gff_format(&mut output, &results).unwrap();
+        let gff_output = String::from_utf8(output).unwrap();
+
+        assert!(gff_output.contains("\tCDS\t900\t1000\t"));
+        assert!(gff_output.contains("\tCDS\t1\t100\t"));
+        assert!(gff_output.contains("circular_wrap=1;part=1/2;"));
+        assert!(gff_output.contains("circular_wrap=1;part=2/2;"));
     }
 }

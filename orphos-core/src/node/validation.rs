@@ -31,10 +31,18 @@ pub fn is_valid_gene(
     start_position: usize,
     stop_position: usize,
     minimum_gene_distance: usize,
+    sequence_length: usize,
+    circular: bool,
     masks: &[Mask],
 ) -> bool {
-    (stop_position + 3).saturating_sub(start_position) >= minimum_gene_distance
-        && !crosses_mask(start_position, stop_position, masks)
+    if !circular {
+        (stop_position + 3).saturating_sub(start_position) >= minimum_gene_distance
+            && !crosses_mask(start_position, stop_position, masks)
+    } else {
+        circular_gene_length(start_position, stop_position, sequence_length)
+            >= minimum_gene_distance
+            && !crosses_mask_circular(start_position, stop_position, sequence_length, masks)
+    }
 }
 
 /// Check if gene is valid for reverse strand
@@ -43,14 +51,26 @@ pub fn is_valid_reverse_gene(
     stop_position: usize,
     minimum_gene_distance: usize,
     sequence_length: usize,
+    circular: bool,
     masks: &[Mask],
 ) -> bool {
-    (stop_position + 3).saturating_sub(start_position) >= minimum_gene_distance
-        && !crosses_mask(
-            sequence_length - stop_position - 1,
-            sequence_length - start_position - 1,
-            masks,
-        )
+    if !circular {
+        (stop_position + 3).saturating_sub(start_position) >= minimum_gene_distance
+            && !crosses_mask(
+                sequence_length - stop_position - 1,
+                sequence_length - start_position - 1,
+                masks,
+            )
+    } else {
+        circular_gene_length(start_position, stop_position, sequence_length)
+            >= minimum_gene_distance
+            && !crosses_mask_circular(
+                sequence_length - stop_position - 1,
+                sequence_length - start_position - 1,
+                sequence_length,
+                masks,
+            )
+    }
 }
 
 /// Check if position qualifies as edge gene
@@ -84,6 +104,24 @@ fn crosses_mask(start: usize, end: usize, masks: &[Mask]) -> bool {
     masks
         .iter()
         .any(|mask| !(end < mask.begin || start > mask.end))
+}
+
+#[inline]
+fn circular_gene_length(start: usize, stop: usize, sequence_length: usize) -> usize {
+    if stop >= start {
+        (stop + 3).saturating_sub(start)
+    } else {
+        sequence_length.saturating_sub(start) + stop + 3
+    }
+}
+
+fn crosses_mask_circular(start: usize, end: usize, sequence_length: usize, masks: &[Mask]) -> bool {
+    if start <= end {
+        return crosses_mask(start, end, masks);
+    }
+
+    // Wrapped interval: [start..sequence_length-1] U [0..end]
+    crosses_mask(start, sequence_length.saturating_sub(1), masks) || crosses_mask(0, end, masks)
 }
 #[cfg(test)]
 mod tests {
@@ -140,31 +178,54 @@ mod tests {
     #[test]
     fn test_is_valid_gene_valid() {
         let masks = vec![];
-        assert!(is_valid_gene(0, 100, 90, &masks));
+        assert!(is_valid_gene(0, 100, 90, 1000, false, &masks));
     }
 
     #[test]
     fn test_is_valid_gene_too_short() {
         let masks = vec![];
-        assert!(!is_valid_gene(0, 50, 90, &masks));
+        assert!(!is_valid_gene(0, 50, 90, 1000, false, &masks));
     }
 
     #[test]
     fn test_is_valid_gene_crosses_mask() {
         let masks = vec![Mask { begin: 10, end: 20 }];
-        assert!(!is_valid_gene(5, 100, 90, &masks));
+        assert!(!is_valid_gene(5, 100, 90, 1000, false, &masks));
     }
 
     #[test]
     fn test_is_valid_reverse_gene_valid() {
         let masks = vec![];
-        assert!(is_valid_reverse_gene(0, 100, 90, 1000, &masks));
+        assert!(is_valid_reverse_gene(0, 100, 90, 1000, false, &masks));
     }
 
     #[test]
     fn test_is_valid_reverse_gene_too_short() {
         let masks = vec![];
-        assert!(!is_valid_reverse_gene(0, 50, 90, 1000, &masks));
+        assert!(!is_valid_reverse_gene(0, 50, 90, 1000, false, &masks));
+    }
+
+    #[test]
+    fn test_is_valid_gene_circular_wraps() {
+        let masks = vec![];
+        // Sequence length 1000, wrapped gene from 950 to 20 has length 73.
+        assert!(is_valid_gene(950, 20, 60, 1000, true, &masks));
+        assert!(!is_valid_gene(950, 20, 100, 1000, true, &masks));
+    }
+
+    #[test]
+    fn test_is_valid_gene_circular_mask_crossing() {
+        let masks = vec![Mask {
+            begin: 980,
+            end: 990,
+        }];
+        assert!(!is_valid_gene(950, 20, 50, 1000, true, &masks));
+
+        let masks = vec![Mask {
+            begin: 100,
+            end: 200,
+        }];
+        assert!(is_valid_gene(950, 20, 50, 1000, true, &masks));
     }
 
     #[test]

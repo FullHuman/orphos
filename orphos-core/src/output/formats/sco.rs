@@ -10,6 +10,11 @@ pub fn write_sco_format<W: Write>(
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
     for gene in &results.genes {
+        if gene.coordinates.begin > gene.coordinates.end {
+            // SCO cannot encode wrapped circular coordinates.
+            continue;
+        }
+
         let strand_num = match gene.coordinates.strand {
             Strand::Forward => 1,
             Strand::Reverse => -1,
@@ -222,5 +227,27 @@ mod tests {
 
         let output = String::from_utf8(buffer).unwrap();
         assert_eq!(output, "1\t101\t1\t100.00\n");
+    }
+
+    #[test]
+    fn test_write_sco_format_skips_wrapped_gene() {
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+
+        let gene = Gene {
+            coordinates: GeneCoordinates {
+                begin: 900,
+                end: 100,
+                strand: Strand::Forward,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let results = create_test_results_with_genes(vec![gene]);
+        write_sco_format(&mut cursor, &results).unwrap();
+
+        let output = String::from_utf8(buffer).unwrap();
+        assert_eq!(output, "");
     }
 }

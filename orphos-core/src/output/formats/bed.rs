@@ -20,6 +20,11 @@ pub fn write_bed_format<W: Write>(
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
     for (i, gene) in results.genes.iter().enumerate() {
+        if gene.coordinates.begin > gene.coordinates.end {
+            // BED6 has no native circular wrap representation.
+            continue;
+        }
+
         let strand = match gene.coordinates.strand {
             Strand::Forward => '+',
             Strand::Reverse => '-',
@@ -171,6 +176,28 @@ mod tests {
         let mut cursor = Cursor::new(&mut buffer);
 
         let results = create_results(vec![]);
+        write_bed_format(&mut cursor, &results).unwrap();
+
+        let output = String::from_utf8(buffer).unwrap();
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_write_bed_format_skips_wrapped_gene() {
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+
+        let gene = Gene {
+            coordinates: GeneCoordinates {
+                begin: 900,
+                end: 100,
+                strand: Strand::Forward,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let results = create_results(vec![gene]);
         write_bed_format(&mut cursor, &results).unwrap();
 
         let output = String::from_utf8(buffer).unwrap();
