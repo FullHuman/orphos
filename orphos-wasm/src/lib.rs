@@ -111,6 +111,7 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
         "gff" => OutputFormat::Gff,
         "sco" => OutputFormat::Sco,
         "gca" => OutputFormat::Gca,
+        "bed" => OutputFormat::Bed,
         _ => return Err(JsValue::from_str("Invalid output format")),
     };
 

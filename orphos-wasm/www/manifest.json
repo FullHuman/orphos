@@ -5,7 +5,7 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "rgb(0, 0, 0)",
-  "theme_color": "rgb(20, 184, 166)",
+  "theme_color": "#22c55e",
   "orientation": "any",
   "categories": ["productivity", "education", "science"],
   "icons": [

@@ -1,4 +1,4 @@
-import init, { init_panic_hook, analyze_sequence } from './pkg/prodigal_wasm.js';
+import init, { init_panic_hook, analyze_sequence } from './pkg/orphos_wasm.js';
 
 // Initialize WASM module
 let wasmInitialized = false;
@@ -31,9 +31,22 @@ const copyBtn = document.getElementById('copy-btn');
 const modeSelect = document.getElementById('mode');
 const formatSelect = document.getElementById('format');
 const translationTableSelect = document.getElementById('translation-table');
+const circularCheckbox = document.getElementById('circular');
 const closedEndsCheckbox = document.getElementById('closed-ends');
 const maskNRunsCheckbox = document.getElementById('mask-n-runs');
 const forceNonSdCheckbox = document.getElementById('force-non-sd');
+
+// Circular and closed-ends are mutually exclusive
+circularCheckbox.addEventListener('change', () => {
+    if (circularCheckbox.checked) {
+        closedEndsCheckbox.checked = false;
+    }
+});
+closedEndsCheckbox.addEventListener('change', () => {
+    if (closedEndsCheckbox.checked) {
+        circularCheckbox.checked = false;
+    }
+});
 
 // File input handler
 fastaFileInput.addEventListener('change', async (e) => {
@@ -79,6 +92,7 @@ analyzeBtn.addEventListener('click', async () => {
             mode: modeSelect.value,
             format: formatSelect.value,
             closed_ends: closedEndsCheckbox.checked,
+            circular: circularCheckbox.checked,
             mask_n_runs: maskNRunsCheckbox.checked,
             force_non_sd: forceNonSdCheckbox.checked,
             translation_table: translationTableSelect.value ? parseInt(translationTableSelect.value) : null
@@ -110,6 +124,7 @@ downloadBtn.addEventListener('click', () => {
     const format = formatSelect.value;
     const extension = format === 'gbk' ? 'gbk' : 
                      format === 'gff' ? 'gff' : 
+                     format === 'bed' ? 'bed' :
                      format === 'sco' ? 'sco' : 'gca';
     
     const blob = new Blob([content], { type: 'text/plain' });
