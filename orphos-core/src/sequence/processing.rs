@@ -129,17 +129,19 @@ fn calculate_exact_base_scores(
     sequence: &[u8],
     search_position: usize,
     search_limit: usize,
-) -> Vec<f64> {
-    (0..search_limit)
-        .map(|pattern_index| {
-            let sequence_position = search_position + pattern_index;
-            match pattern_index % 3 {
-                0 if is_a(sequence, sequence_position) => 2.0,
-                1 | 2 if is_g(sequence, sequence_position) => 3.0,
-                _ => -10.0,
-            }
-        })
-        .collect()
+) -> [f64; MAX_MOTIF_LENGTH] {
+    let mut base_scores = [0.0; MAX_MOTIF_LENGTH];
+
+    for (pattern_index, score) in base_scores.iter_mut().take(search_limit).enumerate() {
+        let sequence_position = search_position + pattern_index;
+        *score = match pattern_index % 3 {
+            0 if is_a(sequence, sequence_position) => 2.0,
+            1 | 2 if is_g(sequence, sequence_position) => 3.0,
+            _ => -10.0,
+        };
+    }
+
+    base_scores
 }
 
 fn find_best_exact_motif(
@@ -228,28 +230,20 @@ fn calculate_mismatch_base_scores(
     sequence: &[u8],
     search_position: usize,
     search_limit: usize,
-) -> Vec<f64> {
-    (0..search_limit)
-        .map(|pattern_index| {
-            let sequence_position = search_position + pattern_index;
-            match pattern_index % 3 {
-                0 => {
-                    if is_a(sequence, sequence_position) {
-                        2.0
-                    } else {
-                        -3.0
-                    }
-                }
-                _ => {
-                    if is_g(sequence, sequence_position) {
-                        3.0
-                    } else {
-                        -2.0
-                    }
-                }
-            }
-        })
-        .collect()
+) -> [f64; MAX_MOTIF_LENGTH] {
+    let mut base_scores = [0.0; MAX_MOTIF_LENGTH];
+
+    for (pattern_index, score) in base_scores.iter_mut().take(search_limit).enumerate() {
+        let sequence_position = search_position + pattern_index;
+        *score = match pattern_index % 3 {
+            0 if is_a(sequence, sequence_position) => 2.0,
+            0 => -3.0,
+            _ if is_g(sequence, sequence_position) => 3.0,
+            _ => -2.0,
+        };
+    }
+
+    base_scores
 }
 
 fn find_best_mismatch_motif(
@@ -399,12 +393,24 @@ fn is_better_motif(current_index: usize, best_index: usize, ribosome_weights: &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sequence::encoded::EncodedSequence;
 
     #[test]
     fn test_calc_most_gc_frame_basic() {
         let sequence = b"ATCGGCGCGCTAATCGGCGC";
         let result = calc_most_gc_frame(sequence, sequence.len());
         assert_eq!(result.len(), sequence.len());
+        for &frame in &result {
+            assert!((-1..=2).contains(&frame));
+        }
+    }
+
+    #[test]
+    fn test_calc_most_gc_frame_encoded_sequence() {
+        let encoded = EncodedSequence::without_masking(b"ATCGGCGCGCTAATCGGCGC");
+        let result = calc_most_gc_frame(&encoded.forward_sequence, encoded.sequence_length);
+
+        assert_eq!(result.len(), encoded.sequence_length);
         for &frame in &result {
             assert!((-1..=2).contains(&frame));
         }
@@ -427,11 +433,29 @@ mod tests {
     }
 
     #[test]
+    fn test_shine_dalgarno_exact_encoded_sequence() {
+        let ribosome_weights = vec![1.0; 28];
+        let encoded = EncodedSequence::without_masking(b"AGGAGGTATGATCGGC");
+
+        let result = shine_dalgarno_exact(&encoded.forward_sequence, 0, 12, &ribosome_weights);
+        assert!(result < ribosome_weights.len());
+    }
+
+    #[test]
     fn test_shine_dalgarno_mm_basic() {
         let ribosome_weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let sequence = b"AGGAGGTATGATCGGC";
 
         let result = shine_dalgarno_mm(sequence, 0, 8, &ribosome_weights);
+        assert!(result < ribosome_weights.len());
+    }
+
+    #[test]
+    fn test_shine_dalgarno_mm_encoded_sequence() {
+        let ribosome_weights = vec![1.0; 28];
+        let encoded = EncodedSequence::without_masking(b"AGGAGGTATGATCGGC");
+
+        let result = shine_dalgarno_mm(&encoded.forward_sequence, 0, 12, &ribosome_weights);
         assert!(result < ribosome_weights.len());
     }
 

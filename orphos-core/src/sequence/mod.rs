@@ -55,13 +55,12 @@ pub mod encoded;
 pub mod io;
 pub mod processing;
 
-use crate::bitmap::{set_bit, test_bit, toggle_bit};
+use crate::bitmap::test_bit;
 use rayon::prelude::*;
 
 pub use io::*;
 pub use processing::*;
-use wide::CmpEq;
-use wide::u8x32;
+use wide::{CmpEq, u8x32};
 
 /// Converts nucleotide character to 2-bit encoding for bitmap storage.
 ///
@@ -107,32 +106,37 @@ pub const fn char_to_nuc(c: u8) -> u8 {
     }
 }
 
+const ENCODED_A: u8 = 0b00;
+const ENCODED_G: u8 = 0b01;
+const ENCODED_C: u8 = 0b10;
+const ENCODED_T: u8 = 0b11;
+
 /// Test if nucleotide at given position is adenine (A)
 #[must_use]
+#[inline]
 pub fn is_a(encoded_sequence: &[u8], n: usize) -> bool {
-    let bit_index = n * 2;
-    !(test_bit(encoded_sequence, bit_index) || test_bit(encoded_sequence, bit_index + 1))
+    encoded_base_code(encoded_sequence, n) == ENCODED_A
 }
 
 /// Test if nucleotide at given position is cytosine (C)
 #[must_use]
+#[inline]
 pub fn is_c(encoded_sequence: &[u8], n: usize) -> bool {
-    let bit_index = n * 2;
-    !test_bit(encoded_sequence, bit_index) && test_bit(encoded_sequence, bit_index + 1)
+    encoded_base_code(encoded_sequence, n) == ENCODED_C
 }
 
 /// Test if nucleotide at given position is guanine (G)
 #[must_use]
+#[inline]
 pub fn is_g(encoded_sequence: &[u8], n: usize) -> bool {
-    let bit_index = n * 2;
-    test_bit(encoded_sequence, bit_index) && !test_bit(encoded_sequence, bit_index + 1)
+    encoded_base_code(encoded_sequence, n) == ENCODED_G
 }
 
 /// Test if nucleotide at given position is thymine (T)
 #[must_use]
+#[inline]
 pub fn is_t(encoded_sequence: &[u8], n: usize) -> bool {
-    let bit_index = n * 2;
-    test_bit(encoded_sequence, bit_index) && test_bit(encoded_sequence, bit_index + 1)
+    encoded_base_code(encoded_sequence, n) == ENCODED_T
 }
 
 /// Test if position contains an unknown nucleotide (N)
@@ -144,9 +148,12 @@ pub fn is_n(unknown_sequence: &[u8], n: usize) -> bool {
 }
 
 /// Test if nucleotide at given position is G or C (high GC content indicator)
+#[inline]
 pub fn is_gc(encoded_sequence: &[u8], n: usize) -> bool {
-    let bit_index = n * 2;
-    test_bit(encoded_sequence, bit_index) != test_bit(encoded_sequence, bit_index + 1)
+    matches!(
+        encoded_base_code(encoded_sequence, n),
+        ENCODED_G | ENCODED_C
+    )
 }
 
 /// Check if genetic code table uses only ATG as start codon
@@ -193,24 +200,27 @@ pub fn is_start(encoded_sequence: &[u8], pos: usize, training: &Training) -> boo
 }
 
 /// Test if codon at position is ATG (methionine start codon)
+#[inline]
 pub fn is_atg(encoded_sequence: &[u8], pos: usize) -> bool {
-    is_a(encoded_sequence, pos)
-        && is_t(encoded_sequence, pos + 1)
-        && is_g(encoded_sequence, pos + 2)
+    encoded_base_code(encoded_sequence, pos) == ENCODED_A
+        && encoded_base_code(encoded_sequence, pos + 1) == ENCODED_T
+        && encoded_base_code(encoded_sequence, pos + 2) == ENCODED_G
 }
 
 /// Test if codon at position is GTG (valine start codon)
+#[inline]
 pub fn is_gtg(encoded_sequence: &[u8], pos: usize) -> bool {
-    is_g(encoded_sequence, pos)
-        && is_t(encoded_sequence, pos + 1)
-        && is_g(encoded_sequence, pos + 2)
+    encoded_base_code(encoded_sequence, pos) == ENCODED_G
+        && encoded_base_code(encoded_sequence, pos + 1) == ENCODED_T
+        && encoded_base_code(encoded_sequence, pos + 2) == ENCODED_G
 }
 
 /// Test if codon at position is TTG (leucine start codon)
+#[inline]
 pub fn is_ttg(encoded_sequence: &[u8], pos: usize) -> bool {
-    is_t(encoded_sequence, pos)
-        && is_t(encoded_sequence, pos + 1)
-        && is_g(encoded_sequence, pos + 2)
+    encoded_base_code(encoded_sequence, pos) == ENCODED_T
+        && encoded_base_code(encoded_sequence, pos + 1) == ENCODED_T
+        && encoded_base_code(encoded_sequence, pos + 2) == ENCODED_G
 }
 
 /// Check if TAG is recognized as stop codon in the given translation table
@@ -234,41 +244,44 @@ const fn is_taa_stop(trans_table: i32) -> bool {
 /// based on the genetic code translation table being used.
 #[inline]
 pub fn is_stop(encoded_sequence: &[u8], pos: usize, training: &Training) -> bool {
-    if is_t(encoded_sequence, pos) {
-        if is_a(encoded_sequence, pos + 1) {
-            if is_g(encoded_sequence, pos + 2) {
+    let first = encoded_base_code(encoded_sequence, pos);
+
+    if first == ENCODED_T {
+        let second = encoded_base_code(encoded_sequence, pos + 1);
+
+        if second == ENCODED_A {
+            let third = encoded_base_code(encoded_sequence, pos + 2);
+            if third == ENCODED_G {
                 return is_tag_stop(training.translation_table);
             }
-            if is_a(encoded_sequence, pos + 2) {
+            if third == ENCODED_A {
                 return is_taa_stop(training.translation_table);
             }
-        } else if is_g(encoded_sequence, pos + 1) && is_a(encoded_sequence, pos + 2) {
-            return is_tga_stop(training.translation_table);
+        } else if second == ENCODED_G {
+            return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A
+                && is_tga_stop(training.translation_table);
+        } else if training.translation_table == 22 && second == ENCODED_C {
+            return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A;
+        } else if training.translation_table == 23 && second == ENCODED_T {
+            return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A;
         }
+
+        return false;
     }
 
-    // Special cases for different translation tables
-    match training.translation_table {
-        2 => {
-            // AGA or AGG are stop codons in translation table 2
-            is_a(encoded_sequence, pos)
-                && is_g(encoded_sequence, pos + 1)
-                && (is_a(encoded_sequence, pos + 2) || is_g(encoded_sequence, pos + 2))
+    if training.translation_table == 2 && first == ENCODED_A {
+        let second = encoded_base_code(encoded_sequence, pos + 1);
+        if second != ENCODED_G {
+            return false;
         }
-        22 => {
-            // TCA is a stop codon in translation table 22
-            is_t(encoded_sequence, pos)
-                && is_c(encoded_sequence, pos + 1)
-                && is_a(encoded_sequence, pos + 2)
-        }
-        23 => {
-            // TTA is a stop codon in translation table 23
-            is_t(encoded_sequence, pos)
-                && is_t(encoded_sequence, pos + 1)
-                && is_a(encoded_sequence, pos + 2)
-        }
-        _ => false,
+
+        return matches!(
+            encoded_base_code(encoded_sequence, pos + 2),
+            ENCODED_A | ENCODED_G
+        );
     }
+
+    false
 }
 
 /// Calculate the GC content of a sequence region
@@ -280,21 +293,12 @@ pub fn gc_content(encoded_sequence: &[u8], start: usize, end: usize) -> f64 {
         return 0.0;
     }
 
-    let (gc_count, total) = (start..=end)
-        .map(|i| {
-            if is_g(encoded_sequence, i) || is_c(encoded_sequence, i) {
-                (1, 1)
-            } else {
-                (0, 1)
-            }
-        })
-        .fold((0, 0), |(gc, tot), (g, t)| (gc + g, tot + t));
+    let total = end - start + 1;
+    let gc_count = (start..=end)
+        .filter(|&position| is_gc(encoded_sequence, position))
+        .count();
 
-    if total == 0 {
-        0.0
-    } else {
-        f64::from(gc_count) / f64::from(total)
-    }
+    gc_count as f64 / total as f64
 }
 
 /// Convert a forward strand reading frame to its corresponding reverse strand frame
@@ -327,6 +331,61 @@ pub const fn find_max_reading_frame(
     }
 }
 
+#[inline]
+const fn encoded_base_code(encoded_sequence: &[u8], position: usize) -> u8 {
+    let bit_index = position * 2;
+    (encoded_sequence[bit_index >> 3] >> (bit_index & 0x07)) & 0b11
+}
+
+#[inline]
+fn write_encoded_base_code(encoded_sequence: &mut [u8], position: usize, code: u8) {
+    let bit_index = position * 2;
+    let byte_index = bit_index >> 3;
+    let shift = bit_index & 0x07;
+    encoded_sequence[byte_index] =
+        (encoded_sequence[byte_index] & !(0b11 << shift)) | ((code & 0b11) << shift);
+}
+
+#[inline]
+const fn reverse_complement_byte(byte: u8) -> u8 {
+    let base_0 = (!byte >> 6) & 0b11;
+    let base_1 = (!byte >> 4) & 0b11;
+    let base_2 = (!byte >> 2) & 0b11;
+    let base_3 = !byte & 0b11;
+
+    base_0 | (base_1 << 2) | (base_2 << 4) | (base_3 << 6)
+}
+
+fn copy_unknown_encoded_bases(
+    reverse_complement_encoded_sequence: &mut [u8],
+    forward_sequence: &[u8],
+    unknown_sequence: &[u8],
+    nucleotide_length: usize,
+) {
+    for (byte_index, &unknown_byte) in unknown_sequence.iter().enumerate() {
+        let mut remaining_unknowns = unknown_byte;
+
+        while remaining_unknowns != 0 {
+            let bit_offset = remaining_unknowns.trailing_zeros() as usize;
+            let source_position = byte_index * 8 + bit_offset;
+
+            if source_position >= nucleotide_length {
+                break;
+            }
+
+            let target_position = nucleotide_length - source_position - 1;
+            let source_code = encoded_base_code(forward_sequence, source_position);
+            write_encoded_base_code(
+                reverse_complement_encoded_sequence,
+                target_position,
+                source_code,
+            );
+
+            remaining_unknowns &= remaining_unknowns - 1;
+        }
+    }
+}
+
 /// Generate the reverse complement of an encoded DNA sequence
 ///
 /// Creates a reverse complement sequence using 2-bit encoding,
@@ -337,33 +396,40 @@ pub fn create_reverse_complement_sequence(
     nucleotide_length: usize,
 ) -> Vec<u8> {
     let mut reverse_complement_encoded_sequence = vec![0; forward_sequence.len()];
-    let sequence_length = nucleotide_length * 2;
 
-    for i in 0..sequence_length {
-        if !test_bit(forward_sequence, i) {
-            let target_pos = if i % 2 == 0 {
-                sequence_length - i - 2
+    if nucleotide_length % 4 == 0 {
+        let encoded_bytes = nucleotide_length / 4;
+
+        for source_byte_index in 0..encoded_bytes {
+            let target_byte_index = encoded_bytes - source_byte_index - 1;
+            reverse_complement_encoded_sequence[target_byte_index] =
+                reverse_complement_byte(forward_sequence[source_byte_index]);
+        }
+
+        copy_unknown_encoded_bases(
+            &mut reverse_complement_encoded_sequence,
+            forward_sequence,
+            unknown_sequence,
+            nucleotide_length,
+        );
+    } else {
+        for source_position in 0..nucleotide_length {
+            let target_position = nucleotide_length - source_position - 1;
+            let source_code = encoded_base_code(forward_sequence, source_position);
+            let target_code = if test_bit(unknown_sequence, source_position) {
+                source_code
             } else {
-                sequence_length - i
+                source_code ^ 0b11
             };
-            if target_pos < sequence_length {
-                set_bit(&mut reverse_complement_encoded_sequence, target_pos);
-            }
+
+            write_encoded_base_code(
+                &mut reverse_complement_encoded_sequence,
+                target_position,
+                target_code,
+            );
         }
     }
 
-    for i in 0..nucleotide_length {
-        if test_bit(unknown_sequence, i) && sequence_length >= 2 + i * 2 {
-            toggle_bit(
-                &mut reverse_complement_encoded_sequence,
-                sequence_length - 1 - i * 2,
-            );
-            toggle_bit(
-                &mut reverse_complement_encoded_sequence,
-                sequence_length - 2 - i * 2,
-            );
-        }
-    }
     reverse_complement_encoded_sequence
 }
 
@@ -378,11 +444,12 @@ pub fn min_of_two_integers(first_value: i32, second_value: i32) -> i32 {
 /// Converts a sequence position to a numeric index representing the
 /// k-mer pattern, used for codon usage and frequency calculations.
 #[must_use]
+#[inline]
 pub fn calculate_kmer_index(kmer_length: usize, encoded_sequence: &[u8], position: usize) -> usize {
     let mut kmer_index = 0;
-    for i in 0..(2 * kmer_length) {
-        let bit_pos = position * 2 + i;
-        kmer_index |= usize::from(test_bit(encoded_sequence, bit_pos)) << i;
+    for offset in 0..kmer_length {
+        kmer_index |=
+            usize::from(encoded_base_code(encoded_sequence, position + offset)) << (offset * 2);
     }
     kmer_index
 }
@@ -566,144 +633,9 @@ pub fn encode_sequence(
     Ok(gc_content)
 }
 
-/// SIMD-accelerated encoding using the `wide` crate with u8x32
-///
-/// Uses portable SIMD operations to process 32 nucleotides at once.
-/// Returns the GC content of the encoded sequence.
-pub fn encode_sequence_simd_wide(
-    sequence: &[u8],
-    encoded_sequence: &mut [u8],
-    unknown_sequence: &mut [u8],
-) -> Result<f64, OrphosError> {
-    let mut gc_count = 0u32;
-    let mut total_count = 0u32;
-
-    // Process 32 bytes at a time with u8x32
-    use crate::constants::CHUNK_SIZE;
-    let chunks = sequence.len() / CHUNK_SIZE;
-
-    // SIMD constants for nucleotide detection
-    let a_upper = u8x32::splat(b'A');
-    let c_upper = u8x32::splat(b'C');
-    let g_upper = u8x32::splat(b'G');
-    let t_upper = u8x32::splat(b'T');
-    let u_upper = u8x32::splat(b'U');
-    // let n_upper = u8x32::splat(b'N');
-
-    let a_lower = u8x32::splat(b'a');
-    let c_lower = u8x32::splat(b'c');
-    let g_lower = u8x32::splat(b'g');
-    let t_lower = u8x32::splat(b't');
-    let u_lower = u8x32::splat(b'u');
-    // let n_lower = u8x32::splat(b'n');
-
-    for chunk_idx in 0..chunks {
-        let chunk_start = chunk_idx * CHUNK_SIZE;
-
-        // Safely load 32 bytes into SIMD vector
-        let input_slice = &sequence[chunk_start..chunk_start + CHUNK_SIZE];
-
-        // Convert slice to array for u8x32::from()
-        let mut input_array = [0u8; 32];
-        input_array.copy_from_slice(input_slice);
-        let input = u8x32::from(input_array);
-
-        // Create masks for each nucleotide type (case-insensitive)
-        let is_a = input.simd_eq(a_upper) | input.simd_eq(a_lower);
-        let is_c = input.simd_eq(c_upper) | input.simd_eq(c_lower);
-        let is_g = input.simd_eq(g_upper) | input.simd_eq(g_lower);
-        let is_t = input.simd_eq(t_upper)
-            | input.simd_eq(t_lower)
-            | input.simd_eq(u_upper)
-            | input.simd_eq(u_lower);
-        // let is_n = input.cmp_eq(n_upper) | input.cmp_eq(n_lower);
-
-        let gc_mask = is_g | is_c;
-        let valid_mask = is_a | is_c | is_g | is_t;
-
-        // Convert to bitmask and count set bits
-        gc_count += gc_mask.to_bitmask().count_ones();
-        total_count += valid_mask.to_bitmask().count_ones();
-
-        // Process each nucleotide for 2-bit encoding
-        // let input_array: [u8; 32] = input.into();
-        let is_a_array: [u8; 32] = is_a.into();
-        let is_c_array: [u8; 32] = is_c.into();
-        let is_g_array: [u8; 32] = is_g.into();
-        let is_t_array: [u8; 32] = is_t.into();
-        // let is_n_array: [u8; 32] = is_n.into();
-
-        for i in 0..CHUNK_SIZE {
-            let pos = chunk_start + i;
-            if pos >= sequence.len() || pos * 2 + 1 >= encoded_sequence.len() * 8 {
-                break;
-            }
-
-            let bit_pos = pos * 2;
-
-            // Use SIMD results to determine nucleotide type
-            if is_a_array[i] != 0 {
-                // A = 00 (default, no bits to set)
-            } else if is_c_array[i] != 0 {
-                // C = 01
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-            } else if is_g_array[i] != 0 {
-                // G = 10
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-            } else if is_t_array[i] != 0 {
-                // T/U = 11
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-            } else {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-                crate::bitmap::set_bit(unknown_sequence, pos);
-            }
-        }
-    }
-
-    // Handle remaining bytes (scalar fallback)
-    for (pos, byte) in sequence.iter().enumerate().skip(chunks * CHUNK_SIZE) {
-        if pos * 2 + 1 >= encoded_sequence.len() * 8 {
-            break;
-        }
-
-        // let byte = sequence[pos];
-        let bit_pos = pos * 2;
-
-        match byte.to_ascii_uppercase() {
-            b'A' => {
-                total_count += 1;
-            }
-            b'C' => {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-                gc_count += 1;
-                total_count += 1;
-            }
-            b'G' => {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-                gc_count += 1;
-                total_count += 1;
-            }
-            b'T' | b'U' => {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-                total_count += 1;
-            }
-            _ => {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-                crate::bitmap::set_bit(unknown_sequence, pos);
-                total_count += 1;
-            }
-        }
-    }
-
-    let gc_content = if total_count > 0 {
-        gc_count as f64 / total_count as f64
-    } else {
-        0.0
-    };
-
-    Ok(gc_content)
+#[inline]
+const fn expand_4_lanes_to_even_bits(bits: u32) -> u8 {
+    ((bits & 0x1) | ((bits & 0x2) << 1) | ((bits & 0x4) << 2) | ((bits & 0x8) << 3)) as u8
 }
 
 /// Optimized packed encoding version with u8x32 and batch bit operations
@@ -754,7 +686,7 @@ pub fn encode_sequence_simd_wide_packed(
         let valid_mask = is_a | is_c | is_g | is_t;
 
         gc_count += gc_mask.to_bitmask().count_ones();
-        total_count += valid_mask.to_bitmask().count_ones();
+        total_count += CHUNK_SIZE as u32;
 
         // Extract SIMD results for bit setting - to_bitmask() returns u32
         // let is_a_mask: u32 = is_a.to_bitmask();
@@ -763,32 +695,48 @@ pub fn encode_sequence_simd_wide_packed(
         let is_t_mask: u32 = is_t.to_bitmask();
         let unknown_mask: u32 = !valid_mask.to_bitmask();
 
-        // Batch process nucleotides using bit operations
-        for i in 0..CHUNK_SIZE {
-            let pos = chunk_start + i;
-            if pos >= sequence.len() || pos * 2 + 1 >= encoded_sequence.len() * 8 {
-                break;
+        let encoded_byte_start = chunk_start / 4;
+        let unknown_byte_start = chunk_start / 8;
+
+        if encoded_byte_start + 8 <= encoded_sequence.len()
+            && unknown_byte_start + 4 <= unknown_sequence.len()
+        {
+            for byte_offset in 0..8 {
+                let shift = byte_offset * 4;
+                let even_bits =
+                    expand_4_lanes_to_even_bits((is_g_mask | is_t_mask) >> shift & 0x0f);
+                let odd_bits = expand_4_lanes_to_even_bits(
+                    (is_c_mask | is_t_mask | unknown_mask) >> shift & 0x0f,
+                ) << 1;
+                encoded_sequence[encoded_byte_start + byte_offset] |= even_bits | odd_bits;
             }
 
-            let bit_pos = pos * 2;
-            let bit_flag = 1u32 << i;
-
-            // Use bit operations to check SIMD results
-            if (is_c_mask & bit_flag) != 0 {
-                // C = 01
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-            } else if (is_g_mask & bit_flag) != 0 {
-                // G = 10
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-            } else if (is_t_mask & bit_flag) != 0 {
-                // T/U = 11
-                crate::bitmap::set_bit(encoded_sequence, bit_pos);
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-            } else if (unknown_mask & bit_flag) != 0 {
-                crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
-                crate::bitmap::set_bit(unknown_sequence, pos);
+            for byte_offset in 0..4 {
+                unknown_sequence[unknown_byte_start + byte_offset] |=
+                    (unknown_mask >> (byte_offset * 8)) as u8;
             }
-            // A = 00 (default, no bits to set)
+        } else {
+            for i in 0..CHUNK_SIZE {
+                let pos = chunk_start + i;
+                if pos >= sequence.len() || pos * 2 + 1 >= encoded_sequence.len() * 8 {
+                    break;
+                }
+
+                let bit_pos = pos * 2;
+                let bit_flag = 1u32 << i;
+
+                if (is_c_mask & bit_flag) != 0 {
+                    crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
+                } else if (is_g_mask & bit_flag) != 0 {
+                    crate::bitmap::set_bit(encoded_sequence, bit_pos);
+                } else if (is_t_mask & bit_flag) != 0 {
+                    crate::bitmap::set_bit(encoded_sequence, bit_pos);
+                    crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
+                } else if (unknown_mask & bit_flag) != 0 {
+                    crate::bitmap::set_bit(encoded_sequence, bit_pos + 1);
+                    crate::bitmap::set_bit(unknown_sequence, pos);
+                }
+            }
         }
     }
 
@@ -991,11 +939,54 @@ mod tests {
     fn test_calculate_kmer_index() {
         let mut seq = vec![0u8; 20];
 
-        // Encode AC at position 0: A(00) C(01)
+        // Encode C at position 0 using the physical bitmap representation.
         crate::bitmap::set_bit(&mut seq, 1); // C
 
         let idx = calculate_kmer_index(2, &seq, 0);
-        assert_eq!(idx, 2); // AC should give index 2
+        assert_eq!(idx, 2);
+    }
+
+    fn calculate_kmer_index_reference(
+        kmer_length: usize,
+        encoded_sequence: &[u8],
+        position: usize,
+    ) -> usize {
+        let mut kmer_index = 0;
+        for i in 0..(2 * kmer_length) {
+            let bit_pos = position * 2 + i;
+            kmer_index |= usize::from(test_bit(encoded_sequence, bit_pos)) << i;
+        }
+        kmer_index
+    }
+
+    #[test]
+    fn test_calculate_kmer_index_matches_bit_reference() {
+        let sequence = b"ATCGNNGCATCGATGCGTACGATCGATCG";
+        let nucleotide_length = sequence.len();
+        let encoded_len = (nucleotide_length * 2).div_ceil(8);
+        let unknown_len = nucleotide_length.div_ceil(8);
+        let mut encoded = vec![0u8; encoded_len];
+        let mut unknown_sequence = vec![0u8; unknown_len];
+        let mut masks = Vec::new();
+
+        encode_sequence(
+            sequence,
+            &mut encoded,
+            &mut unknown_sequence,
+            &mut masks,
+            false,
+        )
+        .unwrap();
+
+        for kmer_length in [1, 2, 3, 6] {
+            for position in 0..=nucleotide_length - kmer_length {
+                assert_eq!(
+                    calculate_kmer_index(kmer_length, &encoded, position),
+                    calculate_kmer_index_reference(kmer_length, &encoded, position),
+                    "kmer_length={kmer_length}, position={position}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -1042,6 +1033,37 @@ mod tests {
         .unwrap();
         assert!((gc - 0.25).abs() < 0.001); // 1 GC out of 4 = 25%
         assert!(crate::bitmap::test_bit(&unknown_sequence, 2)); // N should be marked in unknown_sequence
+    }
+
+    #[test]
+    fn test_simd_packed_encoding_matches_scalar_with_unknowns() {
+        let sequence = b"ATCGNNNNGCATGCACTGACTNNATCGATCGXYZATCGATCGNNNNATCGATCGATCGATCG";
+        let nucleotide_length = sequence.len();
+        let encoded_len = (nucleotide_length * 2).div_ceil(8);
+        let unknown_len = nucleotide_length.div_ceil(8);
+
+        let mut scalar_encoded = vec![0u8; encoded_len];
+        let mut scalar_unknown = vec![0u8; unknown_len];
+        let mut scalar_masks = Vec::new();
+        let scalar_gc = encode_sequence(
+            sequence,
+            &mut scalar_encoded,
+            &mut scalar_unknown,
+            &mut scalar_masks,
+            false,
+        )
+        .unwrap();
+
+        let mut simd_encoded = vec![0u8; encoded_len];
+        let mut simd_unknown = vec![0u8; unknown_len];
+        let simd_gc =
+            encode_sequence_simd_wide_packed(sequence, &mut simd_encoded, &mut simd_unknown)
+                .unwrap();
+
+        assert_eq!(simd_encoded, scalar_encoded);
+        assert_eq!(simd_unknown, scalar_unknown);
+        assert_eq!(scalar_masks.len(), 0);
+        assert!((simd_gc - scalar_gc).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1122,6 +1144,78 @@ mod tests {
         let rseq = create_reverse_complement_sequence(&seq, &unknown_sequence, 2);
 
         assert!(is_t(&rseq, 1));
+    }
+
+    fn create_reverse_complement_sequence_reference(
+        forward_sequence: &[u8],
+        unknown_sequence: &[u8],
+        nucleotide_length: usize,
+    ) -> Vec<u8> {
+        let mut reverse_complement_encoded_sequence = vec![0; forward_sequence.len()];
+        let sequence_length = nucleotide_length * 2;
+
+        for i in 0..sequence_length {
+            if !crate::bitmap::test_bit(forward_sequence, i) {
+                let target_pos = if i % 2 == 0 {
+                    sequence_length - i - 2
+                } else {
+                    sequence_length - i
+                };
+                if target_pos < sequence_length {
+                    crate::bitmap::set_bit(&mut reverse_complement_encoded_sequence, target_pos);
+                }
+            }
+        }
+
+        for i in 0..nucleotide_length {
+            if crate::bitmap::test_bit(unknown_sequence, i) && sequence_length >= 2 + i * 2 {
+                crate::bitmap::toggle_bit(
+                    &mut reverse_complement_encoded_sequence,
+                    sequence_length - 1 - i * 2,
+                );
+                crate::bitmap::toggle_bit(
+                    &mut reverse_complement_encoded_sequence,
+                    sequence_length - 2 - i * 2,
+                );
+            }
+        }
+
+        reverse_complement_encoded_sequence
+    }
+
+    #[test]
+    fn test_reverse_complement_matches_reference_with_unknowns() {
+        for sequence in [
+            b"ATCGNNGCATCG".as_slice(),
+            b"ATCGNNGCATCGA".as_slice(),
+            b"NNNNATCGXYZATCG".as_slice(),
+        ] {
+            let nucleotide_length = sequence.len();
+            let encoded_len = (nucleotide_length * 2).div_ceil(8);
+            let unknown_len = nucleotide_length.div_ceil(8);
+
+            let mut encoded = vec![0u8; encoded_len];
+            let mut unknown_sequence = vec![0u8; unknown_len];
+            let mut masks = Vec::new();
+            encode_sequence(
+                sequence,
+                &mut encoded,
+                &mut unknown_sequence,
+                &mut masks,
+                false,
+            )
+            .unwrap();
+
+            let expected = create_reverse_complement_sequence_reference(
+                &encoded,
+                &unknown_sequence,
+                nucleotide_length,
+            );
+            let actual =
+                create_reverse_complement_sequence(&encoded, &unknown_sequence, nucleotide_length);
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

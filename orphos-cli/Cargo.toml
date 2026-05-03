@@ -41,3 +41,7 @@ path = "src/main.rs"
 [[bench]]
 name = "prodigal_benchmarks"
 harness = false
+
+[[bench]]
+name = "ecoli_single_threaded_orphos"
+harness = false
