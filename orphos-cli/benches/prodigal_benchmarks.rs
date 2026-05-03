@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -100,17 +100,60 @@ fn run_pyrodigal_with_mode(
     Ok(duration)
 }
 
+fn orphos_binary_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let bench_exe = std::env::current_exe()?;
+    let target_dir = bench_exe
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("unable to resolve target directory from benchmark executable")?;
+
+    Ok(target_dir.join(format!("orphos{}", std::env::consts::EXE_SUFFIX)))
+}
+
+fn ensure_orphos_binary(orphos_bin: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if orphos_bin.exists() {
+        return Ok(());
+    }
+
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg("orphos-cli")
+        .arg("--bin")
+        .arg("orphos")
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to build orphos binary: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+fn prepare_orphos_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let orphos_bin = orphos_binary_path()?;
+    ensure_orphos_binary(&orphos_bin)?;
+    Ok(orphos_bin)
+}
+
 // Helper function to run orphos
 fn run_orphos_cli(
+    orphos_bin: &Path,
     input_file: &str,
     output_file: &str,
     threads: Option<usize>,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
-    run_orphos_cli_with_mode(input_file, output_file, threads, "single")
+    run_orphos_cli_with_mode(orphos_bin, input_file, output_file, threads, "single")
 }
 
 // Helper function to run orphos with specified mode
 fn run_orphos_cli_with_mode(
+    orphos_bin: &Path,
     input_file: &str,
     output_file: &str,
     threads: Option<usize>,
@@ -118,18 +161,13 @@ fn run_orphos_cli_with_mode(
 ) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
-    // Set thread count via environment variable if specified
+    let mut cmd = Command::new(orphos_bin);
+
     if let Some(t) = threads {
-        unsafe { std::env::set_var("RAYON_NUM_THREADS", t.to_string()) };
+        cmd.env("RAYON_NUM_THREADS", t.to_string());
     }
 
-    let mut cmd = Command::new("cargo");
-    cmd.arg("run")
-        .arg("--release")
-        .arg("--bin")
-        .arg("orphos")
-        .arg("--")
-        .arg("-i")
+    cmd.arg("-i")
         .arg(input_file)
         .arg("-o")
         .arg(output_file)
@@ -162,6 +200,14 @@ fn benchmark_single_threaded(c: &mut Criterion) {
         ("ecoli", "tests/data/ecoli.fasta"),
         ("salmonella", "tests/data/salmonella.fasta"),
     ];
+
+    let orphos_bin = match prepare_orphos_binary() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Warning: unable to prepare orphos binary: {}", e);
+            return;
+        }
+    };
 
     for (name, input_file) in test_files {
         if !Path::new(input_file).exists() {
@@ -230,6 +276,7 @@ fn benchmark_single_threaded(c: &mut Criterion) {
                 for _ in 0..iters {
                     let output_file = NamedTempFile::new().unwrap();
                     let duration = run_orphos_cli(
+                        black_box(&orphos_bin),
                         black_box(input_file),
                         output_file.path().to_str().unwrap(),
                         Some(1),
@@ -254,6 +301,14 @@ fn benchmark_multi_threaded(c: &mut Criterion) {
         ("ecoli", "tests/data/ecoli.fasta"),
         ("salmonella", "tests/data/salmonella.fasta"),
     ];
+
+    let orphos_bin = match prepare_orphos_binary() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Warning: unable to prepare orphos binary: {}", e);
+            return;
+        }
+    };
 
     let thread_counts = [2, 4, 8];
 
@@ -333,6 +388,7 @@ fn benchmark_multi_threaded(c: &mut Criterion) {
                         for _ in 0..iters {
                             let output_file = NamedTempFile::new().unwrap();
                             let duration = run_orphos_cli(
+                                black_box(&orphos_bin),
                                 black_box(input_file),
                                 output_file.path().to_str().unwrap(),
                                 Some(threads),
@@ -363,6 +419,14 @@ fn benchmark_scaling_analysis(c: &mut Criterion) {
         );
         return;
     }
+
+    let orphos_bin = match prepare_orphos_binary() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Warning: unable to prepare orphos binary: {}", e);
+            return;
+        }
+    };
 
     let file_size = get_file_size(input_file);
     let mut group = c.benchmark_group("scaling_analysis");
@@ -437,6 +501,7 @@ fn benchmark_scaling_analysis(c: &mut Criterion) {
                     for _ in 0..iters {
                         let output_file = NamedTempFile::new().unwrap();
                         let duration = run_orphos_cli(
+                            black_box(&orphos_bin),
                             black_box(input_file),
                             output_file.path().to_str().unwrap(),
                             Some(threads),
@@ -462,6 +527,14 @@ fn benchmark_meta_mode_single_threaded(c: &mut Criterion) {
         ("ecoli", "tests/data/ecoli.fasta"),
         ("salmonella", "tests/data/salmonella.fasta"),
     ];
+
+    let orphos_bin = match prepare_orphos_binary() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Warning: unable to prepare orphos binary: {}", e);
+            return;
+        }
+    };
 
     for (name, input_file) in test_files {
         if !Path::new(input_file).exists() {
@@ -534,6 +607,7 @@ fn benchmark_meta_mode_single_threaded(c: &mut Criterion) {
                 for _ in 0..iters {
                     let output_file = NamedTempFile::new().unwrap();
                     let duration = run_orphos_cli_with_mode(
+                        black_box(&orphos_bin),
                         black_box(input_file),
                         output_file.path().to_str().unwrap(),
                         Some(1),

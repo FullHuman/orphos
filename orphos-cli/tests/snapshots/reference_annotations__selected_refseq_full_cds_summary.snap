@@ -1,0 +1,10 @@
+---
+source: orphos-cli/tests/reference_annotations.rs
+assertion_line: 103
+expression: "summary.join(\"\\n\")"
+---
+fixture	accession	refseq_cds	orphos_cds	orphos_hits(%)	orphos_only_vs_ref	ref_missing_orphos
+salmonella	NC_003198.1	4664	4676	83.276	792	780
+ecoli	NC_000913.3	4340	4319	89.608	430	451
+helicobacter	NC_000915.1	1558	1579	83.184	283	262
+bacillus	NC_000964.3	4240	4226	88.302	482	496

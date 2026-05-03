@@ -1,9 +1,18 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::process;
 
 use assert_cmd::Command;
 use std::io::ErrorKind;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GffCdsRecord {
+    pub start: u32,
+    pub end: u32,
+    pub strand: char,
+    pub attributes: HashMap<String, String>,
+}
 
 /// Runs the original prodigal with given arguments
 pub fn run_original_prodigal(
@@ -92,4 +101,48 @@ pub fn prodigal_available() -> bool {
         }
     }
     false
+}
+
+pub fn parse_gff_cds_records(s: &str) -> Vec<GffCdsRecord> {
+    let mut records = Vec::new();
+
+    for line in s.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 9 || cols[2] != "CDS" {
+            continue;
+        }
+
+        let Ok(start) = cols[3].parse() else {
+            continue;
+        };
+        let Ok(end) = cols[4].parse() else {
+            continue;
+        };
+
+        records.push(GffCdsRecord {
+            start,
+            end,
+            strand: cols[6].chars().next().unwrap_or('.'),
+            attributes: parse_gff_attributes(cols[8]),
+        });
+    }
+
+    records
+}
+
+pub fn parse_gff_attributes(attrs: &str) -> HashMap<String, String> {
+    let mut parsed = HashMap::new();
+
+    for part in attrs.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        parsed.insert(key.to_string(), value.to_string());
+    }
+
+    parsed
 }
