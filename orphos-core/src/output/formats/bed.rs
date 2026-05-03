@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use bio::bio_types::strand::Strand;
+use bio::io::bed;
 
 use crate::{OrphosError, results::OrphosResults};
 
@@ -19,17 +19,14 @@ pub fn write_bed_format<W: Write>(
     writer: &mut W,
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
+    let mut bed_writer = bed::Writer::new(&mut *writer as &mut dyn Write);
     for (i, gene) in results.genes.iter().enumerate() {
         if gene.coordinates.begin > gene.coordinates.end {
             // BED6 has no native circular wrap representation.
             continue;
         }
 
-        let strand = match gene.coordinates.strand {
-            Strand::Forward => '+',
-            Strand::Reverse => '-',
-            Strand::Unknown => '.',
-        };
+        let strand = gene.coordinates.strand;
 
         let name = if gene.annotation.identifier.is_empty() {
             format!("{}_{}", results.sequence_info.header, i + 1)
@@ -37,16 +34,14 @@ pub fn write_bed_format<W: Write>(
             gene.annotation.identifier.clone()
         };
 
-        writeln!(
-            writer,
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            results.sequence_info.header,
-            gene.coordinates.begin,
-            gene.coordinates.end + 1,
-            name,
-            confidence_to_bed_score(gene.score.confidence),
-            strand
-        )?;
+        let mut record = bed::Record::new();
+        record.set_chrom(&results.sequence_info.header);
+        record.set_start(gene.coordinates.begin as u64);
+        record.set_end((gene.coordinates.end + 1) as u64);
+        record.set_name(&name);
+        record.set_score(&confidence_to_bed_score(gene.score.confidence).to_string());
+        record.set_strand(strand);
+        bed_writer.write(&record).map_err(std::io::Error::other)?;
     }
     Ok(())
 }

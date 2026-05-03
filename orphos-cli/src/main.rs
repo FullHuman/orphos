@@ -173,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("Invalid output format".into()),
     };
 
-    let mut orphos = OrphosAnalyzer::new(options);
+    let orphos = OrphosAnalyzer::new(options);
     let results = if let Some(input_file) = matches.get_one::<String>("input") {
         orphos.analyze_fasta_file(input_file)?
     } else {

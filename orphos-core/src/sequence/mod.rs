@@ -609,21 +609,21 @@ pub fn encode_sequence_simd_wide(
         let input = u8x32::from(input_array);
 
         // Create masks for each nucleotide type (case-insensitive)
-        let is_a = input.cmp_eq(a_upper) | input.cmp_eq(a_lower);
-        let is_c = input.cmp_eq(c_upper) | input.cmp_eq(c_lower);
-        let is_g = input.cmp_eq(g_upper) | input.cmp_eq(g_lower);
-        let is_t = input.cmp_eq(t_upper)
-            | input.cmp_eq(t_lower)
-            | input.cmp_eq(u_upper)
-            | input.cmp_eq(u_lower);
+        let is_a = input.simd_eq(a_upper) | input.simd_eq(a_lower);
+        let is_c = input.simd_eq(c_upper) | input.simd_eq(c_lower);
+        let is_g = input.simd_eq(g_upper) | input.simd_eq(g_lower);
+        let is_t = input.simd_eq(t_upper)
+            | input.simd_eq(t_lower)
+            | input.simd_eq(u_upper)
+            | input.simd_eq(u_lower);
         // let is_n = input.cmp_eq(n_upper) | input.cmp_eq(n_lower);
 
         let gc_mask = is_g | is_c;
         let valid_mask = is_a | is_c | is_g | is_t;
 
         // Convert to bitmask and count set bits
-        gc_count += gc_mask.move_mask().count_ones();
-        total_count += valid_mask.move_mask().count_ones();
+        gc_count += gc_mask.to_bitmask().count_ones();
+        total_count += valid_mask.to_bitmask().count_ones();
 
         // Process each nucleotide for 2-bit encoding
         // let input_array: [u8; 32] = input.into();
@@ -719,6 +719,19 @@ pub fn encode_sequence_simd_wide_packed(
     use crate::constants::CHUNK_SIZE;
     let chunks = sequence.len() / CHUNK_SIZE;
 
+    // SIMD splat constants hoisted outside the loop
+    let a_upper = u8x32::splat(b'A');
+    let c_upper = u8x32::splat(b'C');
+    let g_upper = u8x32::splat(b'G');
+    let t_upper = u8x32::splat(b'T');
+    let u_upper = u8x32::splat(b'U');
+
+    let a_lower = u8x32::splat(b'a');
+    let c_lower = u8x32::splat(b'c');
+    let g_lower = u8x32::splat(b'g');
+    let t_lower = u8x32::splat(b't');
+    let u_lower = u8x32::splat(b'u');
+
     for chunk_idx in 0..chunks {
         let chunk_start = chunk_idx * CHUNK_SIZE;
 
@@ -729,38 +742,26 @@ pub fn encode_sequence_simd_wide_packed(
         let input = u8x32::from(input_array);
 
         // SIMD nucleotide detection
-        let a_upper = u8x32::splat(b'A');
-        let c_upper = u8x32::splat(b'C');
-        let g_upper = u8x32::splat(b'G');
-        let t_upper = u8x32::splat(b'T');
-        let u_upper = u8x32::splat(b'U');
-
-        let a_lower = u8x32::splat(b'a');
-        let c_lower = u8x32::splat(b'c');
-        let g_lower = u8x32::splat(b'g');
-        let t_lower = u8x32::splat(b't');
-        let u_lower = u8x32::splat(b'u');
-
-        let is_a = input.cmp_eq(a_upper) | input.cmp_eq(a_lower);
-        let is_c = input.cmp_eq(c_upper) | input.cmp_eq(c_lower);
-        let is_g = input.cmp_eq(g_upper) | input.cmp_eq(g_lower);
-        let is_t = input.cmp_eq(t_upper)
-            | input.cmp_eq(t_lower)
-            | input.cmp_eq(u_upper)
-            | input.cmp_eq(u_lower);
+        let is_a = input.simd_eq(a_upper) | input.simd_eq(a_lower);
+        let is_c = input.simd_eq(c_upper) | input.simd_eq(c_lower);
+        let is_g = input.simd_eq(g_upper) | input.simd_eq(g_lower);
+        let is_t = input.simd_eq(t_upper)
+            | input.simd_eq(t_lower)
+            | input.simd_eq(u_upper)
+            | input.simd_eq(u_lower);
 
         let gc_mask = is_g | is_c;
         let valid_mask = is_a | is_c | is_g | is_t;
 
-        gc_count += gc_mask.move_mask().count_ones();
-        total_count += valid_mask.move_mask().count_ones();
+        gc_count += gc_mask.to_bitmask().count_ones();
+        total_count += valid_mask.to_bitmask().count_ones();
 
-        // Extract SIMD results for bit setting - move_mask() returns i32
-        // let is_a_mask: i32 = is_a.move_mask();
-        let is_c_mask: i32 = is_c.move_mask();
-        let is_g_mask: i32 = is_g.move_mask();
-        let is_t_mask: i32 = is_t.move_mask();
-        let unknown_mask: i32 = !valid_mask.move_mask();
+        // Extract SIMD results for bit setting - to_bitmask() returns u32
+        // let is_a_mask: u32 = is_a.to_bitmask();
+        let is_c_mask: u32 = is_c.to_bitmask();
+        let is_g_mask: u32 = is_g.to_bitmask();
+        let is_t_mask: u32 = is_t.to_bitmask();
+        let unknown_mask: u32 = !valid_mask.to_bitmask();
 
         // Batch process nucleotides using bit operations
         for i in 0..CHUNK_SIZE {
@@ -770,7 +771,7 @@ pub fn encode_sequence_simd_wide_packed(
             }
 
             let bit_pos = pos * 2;
-            let bit_flag = 1i32 << i;
+            let bit_flag = 1u32 << i;
 
             // Use bit operations to check SIMD results
             if (is_c_mask & bit_flag) != 0 {

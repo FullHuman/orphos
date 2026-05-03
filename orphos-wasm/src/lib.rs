@@ -131,7 +131,7 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
     let sequences = parse_fasta_string(fasta_content).map_err(|e| JsValue::from_str(&e))?;
 
     // Run Orphos analysis
-    let mut analyzer = OrphosAnalyzer::new(config);
+    let analyzer = OrphosAnalyzer::new(config);
     let mut all_results = Vec::new();
 
     for (header, description, seq_bytes) in sequences {

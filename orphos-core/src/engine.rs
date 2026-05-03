@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::algorithms::dynamic_programming::eliminate_bad_genes;
 use crate::algorithms::dynamic_programming::predict_genes;
@@ -22,6 +23,9 @@ use crate::training::should_use_sd;
 use crate::types::Gene;
 use crate::types::{CodonType, Node, OrphosError, Training};
 use bio::bio_types::strand::Strand;
+use rayon::prelude::*;
+
+static RAYON_POOL_INIT: OnceLock<()> = OnceLock::new();
 
 /// Marker trait for Orphos training state.
 ///
@@ -158,12 +162,12 @@ impl UntrainedOrphos {
         };
 
         if let Some(num_threads) = orphos.config.num_threads {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build_global()
-                .map_err(|e| {
-                    OrphosError::InvalidSequence(format!("Failed to configure thread pool: {}", e))
-                })?;
+            RAYON_POOL_INIT.get_or_init(|| {
+                // Ignore error if pool was already initialized by a previous call
+                let _ = rayon::ThreadPoolBuilder::new()
+                    .num_threads(num_threads)
+                    .build_global();
+            });
         }
 
         Ok(orphos)
@@ -576,11 +580,15 @@ fn update_display_scores(genes: &mut [Gene], nodes: &[Node]) {
             gene.coordinates.end.saturating_sub(1)
         };
 
-        if let Some(start_node) = nodes.iter().find(|n| {
-            n.position.index == target_pos
-                && n.position.strand == gene.coordinates.strand
-                && n.position.codon_type != CodonType::Stop
-        }) {
+        let lo = nodes.partition_point(|n| n.position.index < target_pos);
+        if let Some(start_node) = nodes[lo..]
+            .iter()
+            .take_while(|n| n.position.index == target_pos)
+            .find(|n| {
+                n.position.strand == gene.coordinates.strand
+                    && n.position.codon_type != CodonType::Stop
+            })
+        {
             gene.display_score =
                 Some(start_node.scores.coding_score + start_node.scores.start_score);
         }
@@ -625,7 +633,7 @@ fn update_display_scores(genes: &mut [Gene], nodes: &[Node]) {
 /// ```rust,no_run
 /// use orphos_core::{OrphosAnalyzer, config::OrphosConfig};
 ///
-/// let mut analyzer = OrphosAnalyzer::new(OrphosConfig::default());
+/// let analyzer = OrphosAnalyzer::new(OrphosConfig::default());
 /// let results = analyzer.analyze_fasta_file("genome.fasta")?;
 ///
 /// for result in results {
@@ -649,7 +657,7 @@ fn update_display_scores(genes: &mut [Gene], nodes: &[Node]) {
 ///     ..Default::default()
 /// };
 ///
-/// let mut analyzer = OrphosAnalyzer::new(config);
+/// let analyzer = OrphosAnalyzer::new(config);
 /// # Ok::<(), orphos_core::types::OrphosError>(())
 /// ```
 #[derive(Debug)]
@@ -701,7 +709,7 @@ impl OrphosAnalyzer {
     /// ```rust,no_run
     /// use orphos_core::{OrphosAnalyzer, config::OrphosConfig};
     ///
-    /// let mut analyzer = OrphosAnalyzer::new(OrphosConfig::default());
+    /// let analyzer = OrphosAnalyzer::new(OrphosConfig::default());
     /// let results = analyzer.analyze_fasta_file("genomes.fasta")?;
     ///
     /// for (i, result) in results.iter().enumerate() {
@@ -710,17 +718,17 @@ impl OrphosAnalyzer {
     /// # Ok::<(), orphos_core::types::OrphosError>(())
     /// ```
     pub fn analyze_fasta_file<P: AsRef<Path>>(
-        &mut self,
+        &self,
         path: P,
     ) -> Result<Vec<OrphosResults>, OrphosError> {
         let sequences = read_fasta_sequences(path.as_ref().to_str().unwrap())?;
 
-        let mut results = Vec::new();
-        for (header, description, seq_bytes) in sequences {
-            let result = self.analyze_sequence_bytes(&seq_bytes, header, description)?;
-            results.push(result);
-        }
-        Ok(results)
+        sequences
+            .into_par_iter()
+            .map(|(header, description, seq_bytes)| {
+                self.analyze_sequence_bytes(&seq_bytes, header, description)
+            })
+            .collect()
     }
 
     /// Analyzes a single sequence from a string.
@@ -750,7 +758,7 @@ impl OrphosAnalyzer {
     /// ```rust,no_run
     /// use orphos_core::{OrphosAnalyzer, config::OrphosConfig};
     ///
-    /// let mut analyzer = OrphosAnalyzer::new(OrphosConfig::default());
+    /// let analyzer = OrphosAnalyzer::new(OrphosConfig::default());
     ///
     /// let sequence = "ATGAAACGCATTAGCACCACCATT...";
     /// let results = analyzer.analyze_sequence(sequence, Some("E. coli K12".to_string()))?;
@@ -761,7 +769,7 @@ impl OrphosAnalyzer {
     /// # Ok::<(), orphos_core::types::OrphosError>(())
     /// ```
     pub fn analyze_sequence(
-        &mut self,
+        &self,
         sequence: &str,
         header: Option<String>,
     ) -> Result<OrphosResults, OrphosError> {
@@ -801,7 +809,7 @@ impl OrphosAnalyzer {
     /// ```rust,no_run
     /// use orphos_core::{OrphosAnalyzer, config::OrphosConfig};
     ///
-    /// let mut analyzer = OrphosAnalyzer::new(OrphosConfig::default());
+    /// let analyzer = OrphosAnalyzer::new(OrphosConfig::default());
     ///
     /// let sequence = b"ATGAAACGCATTAGCACCACCATT...";
     /// let results = analyzer.analyze_sequence_bytes(
@@ -814,7 +822,7 @@ impl OrphosAnalyzer {
     /// # Ok::<(), orphos_core::types::OrphosError>(())
     /// ```
     pub fn analyze_sequence_bytes(
-        &mut self,
+        &self,
         sequence: &[u8],
         header: String,
         description: Option<String>,
@@ -848,13 +856,14 @@ impl OrphosAnalyzer {
             (genes, None, training)
         };
 
+        let num_genes = genes.len();
         Ok(OrphosResults {
-            genes: genes.clone(),
+            genes,
             training_used: best_training,
             sequence_info: SequenceInfo {
                 length: sequence_length,
                 gc_content: encoded_sequence.gc_content,
-                num_genes: genes.len(),
+                num_genes,
                 header,
                 description,
             },
@@ -1115,7 +1124,7 @@ mod tests {
     #[test]
     fn test_analyze_sequence_basic() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence =
             "ATGAAACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTAAATAG".repeat(300);
@@ -1135,7 +1144,7 @@ mod tests {
     #[test]
     fn test_analyze_sequence_with_header() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence =
             "ATGAAACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTAAATAG".repeat(300);
@@ -1151,7 +1160,7 @@ mod tests {
     #[test]
     fn test_analyze_sequence_bytes() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence =
             "ATGAAACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTAAATAG".repeat(300);
@@ -1175,7 +1184,7 @@ mod tests {
             metagenomic: true,
             ..OrphosConfig::default()
         };
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence =
             "ATGAAACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTAAATAG".repeat(300);
@@ -1233,7 +1242,7 @@ mod tests {
     #[test]
     fn test_analyze_fasta_file_not_found() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let result = analyzer.analyze_fasta_file("nonexistent_file.fa");
         assert!(result.is_err());
@@ -1245,7 +1254,7 @@ mod tests {
             metagenomic: true,
             ..OrphosConfig::default()
         };
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         // Create a temporary FASTA file
         let fasta_content = ">test_seq\nATCG\n";
@@ -1266,7 +1275,7 @@ mod tests {
     #[test]
     fn test_analyze_fasta_file_single_genome() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         // Create a temporary FASTA file with a longer sequence for training
         let sequence =
@@ -1289,7 +1298,7 @@ mod tests {
     #[test]
     fn test_analyze_empty_sequence() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence = "";
         let result = analyzer.analyze_sequence(sequence, None);
@@ -1309,7 +1318,7 @@ mod tests {
     #[test]
     fn test_analyze_very_short_sequence() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence = "ATG"; // Very short sequence (3 bp)
         let result = analyzer.analyze_sequence(sequence, None);
@@ -1377,7 +1386,7 @@ mod tests {
     #[test]
     fn test_analyzer_multiple_sequences() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         let sequence1 =
             "ATGAAACGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTCGTAAATAG".repeat(150);
@@ -1404,7 +1413,7 @@ mod tests {
     #[test]
     fn test_error_handling_edge_cases() {
         let config = OrphosConfig::default();
-        let mut analyzer = OrphosAnalyzer::new(config);
+        let analyzer = OrphosAnalyzer::new(config);
 
         // Test with sequence containing invalid characters
         let invalid_sequence = "ATCGXYZ123";
