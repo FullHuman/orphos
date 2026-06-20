@@ -7,8 +7,10 @@ use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
 use orphos_core::output::write_results;
 
+type FastaSequence = (String, Option<String>, Vec<u8>);
+
 /// Options for configuring Orphos gene prediction
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct OrphosOptions {
     #[pyo3(get, set)]
@@ -62,6 +64,7 @@ impl OrphosOptions {
         num_threads=None,
         quiet=true
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         mode: &str,
         format: &str,
@@ -124,7 +127,7 @@ impl OrphosResult {
 }
 
 /// Parse FASTA content from a string
-fn parse_fasta_string(content: &str) -> PyResult<Vec<(String, Option<String>, Vec<u8>)>> {
+fn parse_fasta_string(content: &str) -> PyResult<Vec<FastaSequence>> {
     let cursor = Cursor::new(content.as_bytes());
     let reader = fasta::Reader::new(cursor);
     let mut sequences = Vec::new();
@@ -233,7 +236,7 @@ fn analyze_sequence(fasta_content: &str, options: Option<OrphosOptions>) -> PyRe
     let sequences = parse_fasta_string(fasta_content)?;
 
     // Run Orphos analysis
-    let mut analyzer = OrphosAnalyzer::new(config);
+    let analyzer = OrphosAnalyzer::new(config);
     let mut all_results = Vec::new();
 
     for (header, description, seq_bytes) in sequences {

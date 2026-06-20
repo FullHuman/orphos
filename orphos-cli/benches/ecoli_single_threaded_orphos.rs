@@ -1,4 +1,5 @@
-use criterion::{Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, SamplingMode, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;

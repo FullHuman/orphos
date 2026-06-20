@@ -11,7 +11,7 @@ jobs:
     name: Check Code Formatting
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
@@ -22,7 +22,7 @@ jobs:
     name: Check Dependencies
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Install cargo-outdated
       run: cargo install cargo-outdated
@@ -34,7 +34,7 @@ jobs:
     name: Check Unused Dependencies
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@nightly
     - name: Install cargo-udeps
       run: cargo install cargo-udeps --locked
@@ -45,7 +45,7 @@ jobs:
     name: Check License Headers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Check license headers
       run: |
         # Check that all Rust files have license headers
@@ -67,7 +67,7 @@ jobs:
     name: Check Documentation
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
     - name: Check documentation
       run: cargo doc --all --no-deps --document-private-items

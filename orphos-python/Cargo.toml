@@ -2,6 +2,7 @@
 name = "orphos-python"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.89"
 description = "Python bindings for Orphos gene finder"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/FullHuman/orphos"
@@ -12,8 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 orphos-core = { path = "../orphos-core" }
-pyo3 = { version = "0.27.1", features = ["extension-module"] }
-bio = "2.3.0"
+pyo3 = { version = "0.29.0", features = ["extension-module"] }
+bio = "4.0.0"
 
 [profile.release]
 opt-level = 3

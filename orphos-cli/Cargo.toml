@@ -2,6 +2,7 @@
 name = "orphos-cli"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.89"
 description = "Command-line interface for Orphos, a tool for finding protein-coding genes in microbial genomes."
 license = "GPL-3.0-or-later"
 repository = "https://github.com/FullHuman/orphos"
@@ -20,19 +21,19 @@ exclude = ["tests/data/**"]
 all-features = true
 
 [dependencies]
-clap = { version = "4.5.41", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 orphos-core = { version = "0.2.0", path = "../orphos-core" }
 
 [dev-dependencies]
-tempfile = "3.8"
-assert_cmd = "2.0"
-predicates = "3.0"
-similar = "2.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-criterion = { version = "0.5", features = ["html_reports"] }
-insta = { version = "1.39", features = ["glob"] }
-sha2 = "0.10"
+tempfile = "3.27.0"
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+similar = "3.1.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+insta = { version = "1.48.0", features = ["glob"] }
+sha2 = "0.11.0"
 
 [[bin]]
 name = "orphos"

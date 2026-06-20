@@ -60,7 +60,7 @@ use rayon::prelude::*;
 
 pub use io::*;
 pub use processing::*;
-use wide::{CmpEq, u8x32};
+use wide::u8x32;
 
 /// Converts nucleotide character to 2-bit encoding for bitmap storage.
 ///
@@ -260,9 +260,9 @@ pub fn is_stop(encoded_sequence: &[u8], pos: usize, training: &Training) -> bool
         } else if second == ENCODED_G {
             return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A
                 && is_tga_stop(training.translation_table);
-        } else if training.translation_table == 22 && second == ENCODED_C {
-            return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A;
-        } else if training.translation_table == 23 && second == ENCODED_T {
+        } else if (training.translation_table == 22 && second == ENCODED_C)
+            || (training.translation_table == 23 && second == ENCODED_T)
+        {
             return encoded_base_code(encoded_sequence, pos + 2) == ENCODED_A;
         }
 
@@ -397,13 +397,15 @@ pub fn create_reverse_complement_sequence(
 ) -> Vec<u8> {
     let mut reverse_complement_encoded_sequence = vec![0; forward_sequence.len()];
 
-    if nucleotide_length % 4 == 0 {
+    if nucleotide_length.is_multiple_of(4) {
         let encoded_bytes = nucleotide_length / 4;
 
-        for source_byte_index in 0..encoded_bytes {
+        for (source_byte_index, &source_byte) in
+            forward_sequence.iter().take(encoded_bytes).enumerate()
+        {
             let target_byte_index = encoded_bytes - source_byte_index - 1;
             reverse_complement_encoded_sequence[target_byte_index] =
-                reverse_complement_byte(forward_sequence[source_byte_index]);
+                reverse_complement_byte(source_byte);
         }
 
         copy_unknown_encoded_bases(

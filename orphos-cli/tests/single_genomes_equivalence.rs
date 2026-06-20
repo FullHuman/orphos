@@ -1,8 +1,9 @@
 mod common;
 
-use crate::common::{normalize_output, prodigal_available, run_original_prodigal, run_orphos};
+use crate::common::{
+    normalize_output, prodigal_available, run_original_prodigal, run_orphos, sha256_hex,
+};
 use insta::assert_snapshot;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -18,9 +19,7 @@ fn similarity(a: &str, b: &str) -> f32 {
 }
 
 fn sha256_normalized(s: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(normalize_output(s));
-    format!("{:x}", hasher.finalize())
+    sha256_hex(normalize_output(s))
 }
 
 fn collect_fixtures(dir: &str) -> Vec<PathBuf> {

@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::process;
 
 use assert_cmd::Command;
+use sha2::{Digest, Sha256};
 use std::io::ErrorKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,15 @@ pub struct GffCdsRecord {
     pub end: u32,
     pub strand: char,
     pub attributes: HashMap<String, String>,
+}
+
+pub fn sha256_hex(input: impl AsRef<[u8]>) -> String {
+    let digest = Sha256::digest(input);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    hex
 }
 
 /// Runs the original prodigal with given arguments

@@ -1,6 +1,6 @@
 mod common;
 use crate::common::{
-    normalize_output, prodigal_available, run_original_prodigal, run_orphos, similarity,
+    normalize_output, prodigal_available, run_original_prodigal, run_orphos, sha256_hex, similarity,
 };
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -54,13 +54,8 @@ fn gff_format_equivalence_single_mode_selected_fixtures() {
         );
         if sim < 0.98 {
             // Emit diagnostics: first differing 10 lines and hashes.
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(&orig_norm);
-            let h_orig = format!("{:x}", hasher.finalize());
-            let mut hasher = Sha256::new();
-            hasher.update(&rust_norm);
-            let h_rust = format!("{:x}", hasher.finalize());
+            let h_orig = sha256_hex(&orig_norm);
+            let h_rust = sha256_hex(&rust_norm);
             println!(
                 "  Hashes (normalized) orig={} rust={}",
                 &h_orig[..12],
