@@ -66,10 +66,6 @@ jobs:
             name: orphos-cli-x86_64-windows
             ext: ".exe"
           - os: macos-latest
-            target: x86_64-apple-darwin
-            name: orphos-cli-x86_64-darwin
-            ext: ""
-          - os: macos-latest
             target: aarch64-apple-darwin
             name: orphos-cli-aarch64-darwin
             ext: ""
