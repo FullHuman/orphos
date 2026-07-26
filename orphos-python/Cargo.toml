@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 [dependencies]
 orphos-core = { path = "../orphos-core" }
 pyo3 = { version = "0.29.0", features = ["extension-module"] }
-bio = "4.0.0"
+bio = "4.0.1"
 
 [profile.release]
 opt-level = 3

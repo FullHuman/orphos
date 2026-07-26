@@ -12,9 +12,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 orphos-core = { path = "../orphos-core" }
-wasm-bindgen = "0.2.125"
-serde = { version = "1.0.228", features = ["derive"] }
+wasm-bindgen = "0.2.126"
+serde = { version = "1.0.229", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 console_error_panic_hook = "0.1.7"
-bio = "4.0.0"
+bio = "4.0.1"
+# This must match bio's rand 0.8 dependency so its `js` feature is unified.
 getrandom = { version = "0.2.17", features = ["js"] }
