@@ -25,7 +25,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-orphos-core = "0.1.0"
+orphos-core = "0.3.0"
 ```
 
 ## Quick Start

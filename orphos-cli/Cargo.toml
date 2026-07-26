@@ -1,6 +1,6 @@
 [package]
 name = "orphos-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Command-line interface for Orphos, a tool for finding protein-coding genes in microbial genomes."
@@ -22,7 +22,7 @@ all-features = true
 
 [dependencies]
 clap = { version = "4.6.4", features = ["derive"] }
-orphos-core = { version = "0.2.0", path = "../orphos-core" }
+orphos-core = { version = "0.3.0", path = "../orphos-core" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "orphos"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python bindings for Orphos - a gene prediction tool for microbial genomes"
 readme = "README.md"
 requires-python = ">=3.8"

@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "orphos-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "orphos-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bio",
  "rayon",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "orphos-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bio",
  "console_error_panic_hook",
