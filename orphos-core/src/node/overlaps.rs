@@ -99,7 +99,33 @@ pub fn record_overlapping_starts(nodes: &mut [Node], training: &Training, flag: 
 /// Calculate intergenic modification score for operons and overlaps
 #[inline]
 pub fn intergenic_mod(n1: &Node, n2: &Node, training: &Training) -> f64 {
-    let dist = n1.position.index.abs_diff(n2.position.index) as f64;
+    intergenic_mod_values(IntergenicNode::from(n1), IntergenicNode::from(n2), training)
+}
+
+/// The node fields that [`intergenic_mod`] reads.
+#[derive(Debug, Clone, Copy)]
+pub struct IntergenicNode {
+    pub index: usize,
+    pub strand: Strand,
+    pub ribosome_binding_score: f64,
+    pub upstream_score: f64,
+}
+
+impl From<&Node> for IntergenicNode {
+    fn from(node: &Node) -> Self {
+        Self {
+            index: node.position.index,
+            strand: node.position.strand,
+            ribosome_binding_score: node.scores.ribosome_binding_score,
+            upstream_score: node.scores.upstream_score,
+        }
+    }
+}
+
+/// [`intergenic_mod`] on the extracted node fields.
+#[inline]
+pub fn intergenic_mod_values(n1: IntergenicNode, n2: IntergenicNode, training: &Training) -> f64 {
+    let dist = n1.index.abs_diff(n2.index) as f64;
     let mut rval = 0.0;
     let ovlp = is_overlap(n1, n2);
 
@@ -109,48 +135,52 @@ pub fn intergenic_mod(n1: &Node, n2: &Node, training: &Training) -> f64 {
     }
 
     // Apply distance-based bonuses/penalties
-    if dist > 3.0 * OPERON_DISTANCE || n1.position.strand != n2.position.strand {
-        rval -= OVERLAP_PENALTY_FACTOR * training.start_weight_factor;
+    // Both updates are `rval ± x * start_weight`, which the reference
+    // Prodigal build evaluates as a single fused multiply-add.
+    if dist > 3.0 * OPERON_DISTANCE || n1.strand != n2.strand {
+        rval = (-OVERLAP_PENALTY_FACTOR).mul_add(training.start_weight_factor, rval);
     } else if (dist <= OPERON_DISTANCE && !ovlp) || dist < OPERON_DISTANCE / 4.0 {
-        rval +=
-            (2.0 - dist / OPERON_DISTANCE) * OVERLAP_PENALTY_FACTOR * training.start_weight_factor;
+        rval = ((2.0 - dist / OPERON_DISTANCE) * OVERLAP_PENALTY_FACTOR)
+            .mul_add(training.start_weight_factor, rval);
     }
 
     rval
 }
 
 /// Check if two nodes form an operon-like structure
-fn is_operon_like(n1: &Node, n2: &Node) -> bool {
-    n1.position.strand == n2.position.strand
-        && (n1.position.index + 2 == n2.position.index
-            || n1.position.index == n2.position.index + 1)
+#[inline]
+fn is_operon_like(n1: impl Into<IntergenicNode>, n2: impl Into<IntergenicNode>) -> bool {
+    let (n1, n2) = (n1.into(), n2.into());
+    n1.strand == n2.strand && (n1.index + 2 == n2.index || n1.index == n2.index + 1)
 }
 
 /// Check if two nodes overlap
-fn is_overlap(n1: &Node, n2: &Node) -> bool {
-    (n1.position.strand == Strand::Forward
-        && n2.position.strand == Strand::Forward
-        && n1.position.index + 2 >= n2.position.index)
-        || (n1.position.strand == Strand::Reverse
-            && n2.position.strand == Strand::Reverse
-            && n1.position.index >= n2.position.index + 2)
+#[inline]
+fn is_overlap(n1: impl Into<IntergenicNode>, n2: impl Into<IntergenicNode>) -> bool {
+    let (n1, n2) = (n1.into(), n2.into());
+    (n1.strand == Strand::Forward && n2.strand == Strand::Forward && n1.index + 2 >= n2.index)
+        || (n1.strand == Strand::Reverse
+            && n2.strand == Strand::Reverse
+            && n1.index >= n2.index + 2)
 }
 
 /// Calculate operon bonus
-fn calculate_operon_bonus(n1: &Node, n2: &Node) -> f64 {
+#[inline]
+fn calculate_operon_bonus(n1: impl Into<IntergenicNode>, n2: impl Into<IntergenicNode>) -> f64 {
+    let (n1, n2) = (n1.into(), n2.into());
     let mut bonus = 0.0;
 
-    if n1.position.strand == Strand::Forward && n2.scores.ribosome_binding_score < 0.0 {
-        bonus -= n2.scores.ribosome_binding_score;
+    if n1.strand == Strand::Forward && n2.ribosome_binding_score < 0.0 {
+        bonus -= n2.ribosome_binding_score;
     }
-    if n1.position.strand == Strand::Reverse && n1.scores.ribosome_binding_score < 0.0 {
-        bonus -= n1.scores.ribosome_binding_score;
+    if n1.strand == Strand::Reverse && n1.ribosome_binding_score < 0.0 {
+        bonus -= n1.ribosome_binding_score;
     }
-    if n1.position.strand == Strand::Forward && n2.scores.upstream_score < 0.0 {
-        bonus -= n2.scores.upstream_score;
+    if n1.strand == Strand::Forward && n2.upstream_score < 0.0 {
+        bonus -= n2.upstream_score;
     }
-    if n1.position.strand == Strand::Reverse && n1.scores.upstream_score < 0.0 {
-        bonus -= n1.scores.upstream_score;
+    if n1.strand == Strand::Reverse && n1.upstream_score < 0.0 {
+        bonus -= n1.upstream_score;
     }
 
     bonus

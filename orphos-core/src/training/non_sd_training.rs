@@ -174,10 +174,13 @@ pub fn train_starts_nonsd(
                 best_scores[frame] = 0.0;
                 best_indices[frame] = None;
             } else if node.position.strand == Strand::Forward {
-                let score = node.scores.coding_score
-                    + weight_factor * node.motif_info.best_motif.score
-                    + weight_factor
-                        * training.start_type_weights[node.position.codon_type.to_index()];
+                // `cscore + wt*mot.score + wt*type_wt` with the two fused
+                // multiply-adds of the reference build.
+                let score = weight_factor.mul_add(
+                    training.start_type_weights[node.position.codon_type.to_index()],
+                    weight_factor
+                        .mul_add(node.motif_info.best_motif.score, node.scores.coding_score),
+                );
                 if score >= best_scores[frame] {
                     best_scores[frame] = score;
                     best_indices[frame] = Some(j);
@@ -235,10 +238,13 @@ pub fn train_starts_nonsd(
                 best_scores[frame] = 0.0;
                 best_indices[frame] = None;
             } else if node.position.strand == Strand::Reverse {
-                let score = node.scores.coding_score
-                    + weight_factor * node.motif_info.best_motif.score
-                    + weight_factor
-                        * training.start_type_weights[node.position.codon_type.to_index()];
+                // `cscore + wt*mot.score + wt*type_wt` with the two fused
+                // multiply-adds of the reference build.
+                let score = weight_factor.mul_add(
+                    training.start_type_weights[node.position.codon_type.to_index()],
+                    weight_factor
+                        .mul_add(node.motif_info.best_motif.score, node.scores.coding_score),
+                );
                 if score >= best_scores[frame] {
                     best_scores[frame] = score;
                     best_indices[frame] = Some(rev_j);

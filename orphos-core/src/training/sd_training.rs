@@ -12,6 +12,32 @@ use crate::{
 };
 
 /// Train start codon recognition using Shine-Dalgarno motifs
+/// The node fields read by [`train_starts_sd`].
+#[derive(Debug, Clone, Copy)]
+struct SdNode {
+    index: usize,
+    strand: Strand,
+    coding_score: f64,
+    ribosome_binding_sites: [usize; 2],
+    codon_type_index: usize,
+    is_stop: bool,
+    is_edge: bool,
+}
+
+impl From<&Node> for SdNode {
+    fn from(node: &Node) -> Self {
+        Self {
+            index: node.position.index,
+            strand: node.position.strand,
+            coding_score: node.scores.coding_score,
+            ribosome_binding_sites: node.motif_info.ribosome_binding_sites,
+            codon_type_index: node.position.codon_type.to_index(),
+            is_stop: node.position.codon_type == CodonType::Stop,
+            is_edge: node.position.is_edge,
+        }
+    }
+}
+
 pub fn train_starts_sd(
     sequence: &[u8],
     reverse_sequence: &[u8],
@@ -19,6 +45,10 @@ pub fn train_starts_sd(
     nodes: &[Node],
     training: &mut Training,
 ) {
+    // The iterations below only read a few fields of every node; a compact
+    // copy keeps the repeated scans cache friendly.
+    let compact: Vec<SdNode> = nodes.iter().map(SdNode::from).collect();
+    let nodes = &compact;
     let weight_factor = training.start_weight_factor;
     let mut type_background = [0.0; NUM_CODON_TYPES];
     let mut ribosome_binding_site_background = [0.0; NUM_RBS_WEIGHTS];
@@ -29,10 +59,10 @@ pub fn train_starts_sd(
 
     let mut total_sum = 0.0;
     for node in nodes {
-        if node.position.codon_type == CodonType::Stop {
+        if node.is_stop {
             continue;
         }
-        type_background[node.position.codon_type.to_index()] += 1.0;
+        type_background[node.codon_type_index] += 1.0;
         total_sum += 1.0;
     }
 
@@ -49,26 +79,22 @@ pub fn train_starts_sd(
         let mut ribosome_binding_site_background_sum = 0.0;
 
         for node in nodes {
-            if node.position.codon_type == CodonType::Stop || node.position.is_edge {
+            if node.is_stop || node.is_edge {
                 continue;
             }
 
-            let max_ribosome_binding_site = if training.rbs_weights
-                [node.motif_info.ribosome_binding_sites[0]]
-                > training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
-                    + RBS_WEIGHT_THRESHOLD_HIGH
-                || node.motif_info.ribosome_binding_sites[1] == 0
+            let max_ribosome_binding_site = if training.rbs_weights[node.ribosome_binding_sites[0]]
+                > training.rbs_weights[node.ribosome_binding_sites[1]] + RBS_WEIGHT_THRESHOLD_HIGH
+                || node.ribosome_binding_sites[1] == 0
             {
-                node.motif_info.ribosome_binding_sites[0]
-            } else if training.rbs_weights[node.motif_info.ribosome_binding_sites[0]]
-                < training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
-                    - RBS_WEIGHT_THRESHOLD_HIGH
-                || node.motif_info.ribosome_binding_sites[0] == 0
+                node.ribosome_binding_sites[0]
+            } else if training.rbs_weights[node.ribosome_binding_sites[0]]
+                < training.rbs_weights[node.ribosome_binding_sites[1]] - RBS_WEIGHT_THRESHOLD_HIGH
+                || node.ribosome_binding_sites[0] == 0
             {
-                node.motif_info.ribosome_binding_sites[1]
+                node.ribosome_binding_sites[1]
             } else {
-                node.motif_info.ribosome_binding_sites[0]
-                    .max(node.motif_info.ribosome_binding_sites[1])
+                node.ribosome_binding_sites[0].max(node.ribosome_binding_sites[1])
             };
 
             ribosome_binding_site_background[max_ribosome_binding_site] += 1.0;
@@ -93,19 +119,17 @@ pub fn train_starts_sd(
         let mut codon_types = [0; NUM_CODON_TYPES];
 
         for (node_index, node) in nodes.iter().enumerate() {
-            if node.position.codon_type != CodonType::Stop && node.position.is_edge {
+            if !node.is_stop && node.is_edge {
                 continue;
             }
 
-            let frame = node.position.index % NUM_CODON_TYPES;
+            let frame = node.index % NUM_CODON_TYPES;
 
-            if node.position.codon_type == CodonType::Stop
-                && node.position.strand == Strand::Forward
-            {
+            if node.is_stop && node.strand == Strand::Forward {
                 if best_scores[frame] >= score_threshold && best_node_indices[frame].is_some() {
                     let best_index = best_node_indices[frame].unwrap();
                     if best_index < nodes.len()
-                        && nodes[best_index].position.index % NUM_CODON_TYPES == frame
+                        && nodes[best_index].index % NUM_CODON_TYPES == frame
                     {
                         ribosome_binding_site_real[ribosome_binding_sites[frame]] += 1.0;
                         type_real[codon_types[frame]] += 1.0;
@@ -115,7 +139,7 @@ pub fn train_starts_sd(
                                 sequence,
                                 sequence_length,
                                 Strand::Forward,
-                                nodes[best_index].position.index,
+                                nodes[best_index].index,
                                 training,
                             );
                         }
@@ -126,34 +150,38 @@ pub fn train_starts_sd(
                 best_node_indices[frame] = None;
                 ribosome_binding_sites[frame] = 0;
                 codon_types[frame] = 0;
-            } else if node.position.strand == Strand::Forward {
+            } else if node.strand == Strand::Forward {
                 let max_ribosome_binding_site = if training.rbs_weights
-                    [node.motif_info.ribosome_binding_sites[0]]
-                    > training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
+                    [node.ribosome_binding_sites[0]]
+                    > training.rbs_weights[node.ribosome_binding_sites[1]]
                         + RBS_WEIGHT_THRESHOLD_HIGH
-                    || node.motif_info.ribosome_binding_sites[1] == 0
+                    || node.ribosome_binding_sites[1] == 0
                 {
-                    node.motif_info.ribosome_binding_sites[0]
-                } else if training.rbs_weights[node.motif_info.ribosome_binding_sites[0]]
-                    < training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
+                    node.ribosome_binding_sites[0]
+                } else if training.rbs_weights[node.ribosome_binding_sites[0]]
+                    < training.rbs_weights[node.ribosome_binding_sites[1]]
                         - RBS_WEIGHT_THRESHOLD_HIGH
-                    || node.motif_info.ribosome_binding_sites[0] == 0
+                    || node.ribosome_binding_sites[0] == 0
                 {
-                    node.motif_info.ribosome_binding_sites[1]
+                    node.ribosome_binding_sites[1]
                 } else {
-                    node.motif_info.ribosome_binding_sites[0]
-                        .max(node.motif_info.ribosome_binding_sites[1])
+                    node.ribosome_binding_sites[0].max(node.ribosome_binding_sites[1])
                 };
 
-                let score = node.scores.coding_score
-                    + weight_factor * training.rbs_weights[max_ribosome_binding_site]
-                    + weight_factor
-                        * training.start_type_weights[node.position.codon_type.to_index()];
+                // `cscore + wt*rbs_wt + wt*type_wt` with the two fused
+                // multiply-adds of the reference build.
+                let score = weight_factor.mul_add(
+                    training.start_type_weights[node.codon_type_index],
+                    weight_factor.mul_add(
+                        training.rbs_weights[max_ribosome_binding_site],
+                        node.coding_score,
+                    ),
+                );
 
                 if score >= best_scores[frame] {
                     best_scores[frame] = score;
                     best_node_indices[frame] = Some(node_index);
-                    codon_types[frame] = node.position.codon_type.to_index();
+                    codon_types[frame] = node.codon_type_index;
                     ribosome_binding_sites[frame] = max_ribosome_binding_site;
                 }
             }
@@ -165,19 +193,17 @@ pub fn train_starts_sd(
         codon_types.fill(0);
 
         for (node_index, node) in nodes.iter().enumerate().rev() {
-            if node.position.codon_type != CodonType::Stop && node.position.is_edge {
+            if !node.is_stop && node.is_edge {
                 continue;
             }
 
-            let frame = node.position.index % NUM_CODON_TYPES;
+            let frame = node.index % NUM_CODON_TYPES;
 
-            if node.position.codon_type == CodonType::Stop
-                && node.position.strand == Strand::Reverse
-            {
+            if node.is_stop && node.strand == Strand::Reverse {
                 if best_scores[frame] >= score_threshold && best_node_indices[frame].is_some() {
                     let best_index = best_node_indices[frame].unwrap();
                     if best_index < nodes.len()
-                        && nodes[best_index].position.index % NUM_CODON_TYPES == frame
+                        && nodes[best_index].index % NUM_CODON_TYPES == frame
                     {
                         ribosome_binding_site_real[ribosome_binding_sites[frame]] += 1.0;
                         type_real[codon_types[frame]] += 1.0;
@@ -187,7 +213,7 @@ pub fn train_starts_sd(
                                 reverse_sequence,
                                 sequence_length,
                                 Strand::Reverse,
-                                nodes[best_index].position.index,
+                                nodes[best_index].index,
                                 training,
                             );
                         }
@@ -198,34 +224,38 @@ pub fn train_starts_sd(
                 best_node_indices[frame] = None;
                 ribosome_binding_sites[frame] = 0;
                 codon_types[frame] = 0;
-            } else if node.position.strand == Strand::Reverse {
+            } else if node.strand == Strand::Reverse {
                 let max_ribosome_binding_site = if training.rbs_weights
-                    [node.motif_info.ribosome_binding_sites[0]]
-                    > training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
+                    [node.ribosome_binding_sites[0]]
+                    > training.rbs_weights[node.ribosome_binding_sites[1]]
                         + RBS_WEIGHT_THRESHOLD_HIGH
-                    || node.motif_info.ribosome_binding_sites[1] == 0
+                    || node.ribosome_binding_sites[1] == 0
                 {
-                    node.motif_info.ribosome_binding_sites[0]
-                } else if training.rbs_weights[node.motif_info.ribosome_binding_sites[0]]
-                    < training.rbs_weights[node.motif_info.ribosome_binding_sites[1]]
+                    node.ribosome_binding_sites[0]
+                } else if training.rbs_weights[node.ribosome_binding_sites[0]]
+                    < training.rbs_weights[node.ribosome_binding_sites[1]]
                         - RBS_WEIGHT_THRESHOLD_HIGH
-                    || node.motif_info.ribosome_binding_sites[0] == 0
+                    || node.ribosome_binding_sites[0] == 0
                 {
-                    node.motif_info.ribosome_binding_sites[1]
+                    node.ribosome_binding_sites[1]
                 } else {
-                    node.motif_info.ribosome_binding_sites[0]
-                        .max(node.motif_info.ribosome_binding_sites[1])
+                    node.ribosome_binding_sites[0].max(node.ribosome_binding_sites[1])
                 };
 
-                let score = node.scores.coding_score
-                    + weight_factor * training.rbs_weights[max_ribosome_binding_site]
-                    + weight_factor
-                        * training.start_type_weights[node.position.codon_type.to_index()];
+                // `cscore + wt*rbs_wt + wt*type_wt` with the two fused
+                // multiply-adds of the reference build.
+                let score = weight_factor.mul_add(
+                    training.start_type_weights[node.codon_type_index],
+                    weight_factor.mul_add(
+                        training.rbs_weights[max_ribosome_binding_site],
+                        node.coding_score,
+                    ),
+                );
 
                 if score >= best_scores[frame] {
                     best_scores[frame] = score;
                     best_node_indices[frame] = Some(node_index);
-                    codon_types[frame] = node.position.codon_type.to_index();
+                    codon_types[frame] = node.codon_type_index;
                     ribosome_binding_sites[frame] = max_ribosome_binding_site;
                 }
             }

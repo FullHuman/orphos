@@ -331,8 +331,9 @@ pub const fn find_max_reading_frame(
     }
 }
 
+/// Returns the 2-bit code of the base at `position`.
 #[inline]
-const fn encoded_base_code(encoded_sequence: &[u8], position: usize) -> u8 {
+pub(crate) const fn encoded_base_code(encoded_sequence: &[u8], position: usize) -> u8 {
     let bit_index = position * 2;
     (encoded_sequence[bit_index >> 3] >> (bit_index & 0x07)) & 0b11
 }
@@ -473,27 +474,35 @@ pub fn calculate_background_mer_frequencies(
         size *= 4;
     }
 
-    // Use parallel processing to count k-mers
-    let chunk_size = std::cmp::max(
-        1000,
-        (sequence_length - length + 1) / rayon::current_num_threads(),
-    );
-    let total_counts: Vec<i32> = (0..(sequence_length - length + 1))
+    // Use parallel processing to count k-mers. Each chunk walks its positions
+    // with a rolling k-mer index so that every base is read once.
+    let positions = (sequence_length + 1).saturating_sub(length);
+    let chunk_size = std::cmp::max(1000, positions / rayon::current_num_threads());
+    let chunk_count = positions.div_ceil(chunk_size);
+    let high_shift = 2 * (length - 1);
+    let total_counts: Vec<i32> = (0..chunk_count)
         .into_par_iter()
-        .chunks(chunk_size)
         .map(|chunk| {
             let mut local_counts = vec![0i32; size];
+            let start = chunk * chunk_size;
+            let end = (start + chunk_size).min(positions);
 
-            for i in chunk {
-                let seq_idx = calculate_kmer_index(length, encoded_sequence, i);
-                if seq_idx < size {
-                    local_counts[seq_idx] += 1;
+            let mut seq_idx = calculate_kmer_index(length, encoded_sequence, start);
+            let mut rseq_idx =
+                calculate_kmer_index(length, reverse_complement_encoded_sequence, start);
+            for i in start..end {
+                if i > start {
+                    seq_idx = (seq_idx >> 2)
+                        | (usize::from(encoded_base_code(encoded_sequence, i + length - 1))
+                            << high_shift);
+                    rseq_idx = (rseq_idx >> 2)
+                        | (usize::from(encoded_base_code(
+                            reverse_complement_encoded_sequence,
+                            i + length - 1,
+                        )) << high_shift);
                 }
-
-                let rseq_idx = calculate_kmer_index(length, reverse_complement_encoded_sequence, i);
-                if rseq_idx < size {
-                    local_counts[rseq_idx] += 1;
-                }
+                local_counts[seq_idx] += 1;
+                local_counts[rseq_idx] += 1;
             }
 
             local_counts
@@ -508,7 +517,7 @@ pub fn calculate_background_mer_frequencies(
             },
         );
 
-    let glob = (sequence_length - length + 1) * 2;
+    let glob = positions * 2;
 
     bg.par_iter_mut()
         .enumerate()

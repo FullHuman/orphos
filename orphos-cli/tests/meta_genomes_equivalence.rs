@@ -8,7 +8,12 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-const SIMILARITY_THRESHOLD: f32 = 0.9993; // 99.93%
+// Prodigal 2.6.3 applies its metagenomic short-gene penalty to every gene
+// because of an `abs(a - b < 120)` typo that upstream fixed after the release
+// (commit b34b63b). Orphos implements the fixed logic, so against the 2.6.3
+// release a few metagenomic genes per genome differ; against a build of
+// upstream master (`ORPHOS_PRODIGAL_BIN`) the output is byte-identical.
+const SIMILARITY_THRESHOLD: f32 = 0.995; // 99.5%
 
 use std::collections::HashMap;
 

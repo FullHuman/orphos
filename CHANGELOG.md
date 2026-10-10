@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Single-genome predictions are now byte-identical to Prodigal: the GC frame
+  bias counted the last one or two bases of a sequence differently, the
+  coding-score length factor used `powi` where Prodigal uses `pow`, ORF GC
+  content ignored a trailing partial codon on the reverse strand, start
+  tweaking ranked alternatives differently from `tweak_final_starts`, and the
+  metagenomic coding penalty was rounded differently. Expressions that the
+  reference Prodigal build evaluates with fused multiply-adds (GC frame
+  score, intergenic modifier, upstream composition, edge bonuses, start
+  training scores) now use `mul_add` so near-ties resolve identically.
+- Metagenomic predictions match Prodigal's master branch (which fixes a 2.6.3
+  typo that applied the short-gene penalty to every gene) and pyrodigal.
+- Added `TrainedOrphos::training()` to access the trained model.
+
+### Changed
+
+- Rewrote the dynamic-programming inner loop to visit only compatible source
+  nodes per target, resolve constant-score connection types (5'rev->5'fwd and
+  distant intergenic connections) with sliding-window maxima, and score the
+  remaining candidates on a compact node view; results are unchanged.
+- Sped up node creation (byte-level codon classification tables), node
+  sorting, Shine-Dalgarno scoring (per-6-mer lookup table), coding-score,
+  ORF GC, GC-frame, background k-mer and start-training passes.
+- Metagenomic mode now computes the ORF GC content once per node set instead
+  of once per preset.
+- Single-genome prediction of *E. coli* K-12 runs about 6.5x faster
+  single-threaded and metagenomic mode about 8.5x faster, with byte-identical
+  output in every format.
+
 ## [0.3.0] - 2026-07-26
 
 ### Added

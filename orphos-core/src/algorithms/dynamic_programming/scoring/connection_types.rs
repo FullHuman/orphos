@@ -3,7 +3,7 @@ use bio::bio_types::strand::Strand;
 use crate::types::{CodonType, Node};
 
 /// Represents the type of connection between two nodes in the gene prediction graph
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConnectionType {
     /// 5' forward start -> 3' forward stop (normal gene)
     ForwardGene,

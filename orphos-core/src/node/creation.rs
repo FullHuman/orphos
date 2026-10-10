@@ -93,6 +93,107 @@ impl StrandProcessingContext {
     }
 }
 
+/// Classification of every 6-bit codon code for one translation table.
+///
+/// The tables are derived from [`is_stop`] and [`check_start_codon`] on each of
+/// the 64 possible codons, so the strand scans classify codons exactly like
+/// the per-position checks while reading every base only once.
+struct CodonTables {
+    is_stop: [bool; 64],
+    start_type: [Option<CodonType>; 64],
+}
+
+impl CodonTables {
+    fn new(training: &Training) -> Self {
+        let mut tables = Self {
+            is_stop: [false; 64],
+            start_type: [None; 64],
+        };
+        for code in 0..64u8 {
+            let (first, second, third) = (code >> 4, (code >> 2) & 0b11, code & 0b11);
+            // Pack the three bases as the encoded sequence stores them.
+            let packed = [first | (second << 2) | (third << 4), 0];
+            tables.is_stop[usize::from(code)] = is_stop(&packed, 0, training);
+            tables.start_type[usize::from(code)] = check_start_codon(&packed, 0, training);
+        }
+        tables
+    }
+}
+
+/// Classification of the four codons that start inside one byte of the
+/// encoded sequence, keyed by that byte and the low half of the following
+/// one (six bases).
+///
+/// Entry layout: bits 0..4 flag stop codons starting at base 0..3 of the
+/// byte, bits 4..8 flag start codons, and bits 8..16 hold the start codon
+/// type index (two bits per base) for the flagged starts.
+struct ByteCodonTable {
+    entries: Vec<u16>,
+}
+
+impl ByteCodonTable {
+    /// Six bases of two bits each.
+    const KEY_BITS: usize = 12;
+    const KEY_COUNT: usize = 1 << Self::KEY_BITS;
+    const STOP_SHIFT: u16 = 0;
+    const START_SHIFT: u16 = 4;
+    const TYPE_SHIFT: u16 = 8;
+
+    fn new(codon_tables: &CodonTables) -> Self {
+        let entries = (0..Self::KEY_COUNT as u16)
+            .map(|key| {
+                let base = |offset: u16| ((key >> (2 * offset)) & 0b11) as u8;
+                let mut entry = 0u16;
+                for offset in 0..4u16 {
+                    let codon = usize::from(
+                        (base(offset) << 4) | (base(offset + 1) << 2) | base(offset + 2),
+                    );
+                    if codon_tables.is_stop[codon] {
+                        entry |= 1 << (Self::STOP_SHIFT + offset);
+                    }
+                    if let Some(codon_type) = codon_tables.start_type[codon] {
+                        entry |= 1 << (Self::START_SHIFT + offset);
+                        entry |= (codon_type.to_index() as u16) << (Self::TYPE_SHIFT + 2 * offset);
+                    }
+                }
+                entry
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// Entry for the byte at `byte_index`; bases past the end of the buffer
+    /// read as zero, which only affects codons past the scanned range.
+    #[inline]
+    fn entry(&self, encoded_sequence: &[u8], byte_index: usize) -> u16 {
+        let low = usize::from(encoded_sequence[byte_index]);
+        let high = usize::from(encoded_sequence.get(byte_index + 1).copied().unwrap_or(0));
+        self.entries[(low | (high << 8)) & (Self::KEY_COUNT - 1)]
+    }
+
+    #[inline]
+    fn is_stop(entry: u16, offset: usize) -> bool {
+        entry & (1 << (Self::STOP_SHIFT as usize + offset)) != 0
+    }
+
+    #[inline]
+    fn start_type(entry: u16, offset: usize) -> Option<CodonType> {
+        if entry & (1 << (Self::START_SHIFT as usize + offset)) == 0 {
+            return None;
+        }
+        Some(
+            match (entry >> (Self::TYPE_SHIFT as usize + 2 * offset)) & 0b11 {
+                0 => CodonType::Atg,
+                1 => CodonType::Gtg,
+                _ => CodonType::Ttg,
+            },
+        )
+    }
+}
+
+/// Number of sequence positions encoded per byte.
+const POSITIONS_PER_BYTE: usize = 4;
+
 /// Add nodes for start and stop codons in both directions
 ///
 /// This function identifies potential start and stop codons in the sequence
@@ -121,6 +222,8 @@ pub fn add_nodes(
 
     let sequence_length_mod = sequence_length % READING_FRAMES;
 
+    let codon_tables = ByteCodonTable::new(&CodonTables::new(training));
+
     let mut context =
         StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
     context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
@@ -130,6 +233,7 @@ pub fn add_nodes(
         &mut context,
         &encoded_sequence.masks,
         training,
+        &codon_tables,
     );
     handle_remaining_starts(
         &encoded_sequence.forward_sequence,
@@ -148,6 +252,7 @@ pub fn add_nodes(
         &mut context,
         &encoded_sequence.masks,
         training,
+        &codon_tables,
     );
     handle_remaining_starts(
         &encoded_sequence.reverse_complement_sequence,
@@ -170,13 +275,63 @@ fn process_forward_strand(
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
+    codon_tables: &ByteCodonTable,
 ) {
-    let scanning_start_position = context.sequence_length.saturating_sub(CODON_LENGTH);
+    if context.sequence_length < CODON_LENGTH {
+        return;
+    }
+    let scanning_start_position = context.sequence_length - CODON_LENGTH;
 
-    for position_index in (0..=scanning_start_position).rev() {
+    // Scan one byte (four positions) at a time, from the end of the sequence.
+    // Bytes without stop or start codons only matter for edge genes at the
+    // first positions, so everything else is skipped without per-position
+    // work.
+    let mut byte_index = scanning_start_position / POSITIONS_PER_BYTE;
+    loop {
+        let entry = codon_tables.entry(encoded_sequence, byte_index);
+        let first_position = byte_index * POSITIONS_PER_BYTE;
+        let last_offset = (scanning_start_position - first_position).min(POSITIONS_PER_BYTE - 1);
+        if entry != 0 || first_position <= EDGE_POSITION_LIMIT {
+            for offset in (0..=last_offset).rev() {
+                let position_index = first_position + offset;
+                process_forward_position(
+                    encoded_sequence,
+                    nodes,
+                    context,
+                    masks,
+                    training,
+                    position_index,
+                    ByteCodonTable::is_stop(entry, offset),
+                    ByteCodonTable::start_type(entry, offset),
+                );
+            }
+        }
+        if byte_index == 0 {
+            break;
+        }
+        byte_index -= 1;
+    }
+}
+
+/// Positions at or below this may start an edge gene.
+const EDGE_POSITION_LIMIT: usize = 2;
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn process_forward_position(
+    encoded_sequence: &[u8],
+    nodes: &mut Vec<Node>,
+    context: &mut StrandProcessingContext,
+    masks: &[Mask],
+    training: &Training,
+    position_index: usize,
+    is_stop_codon: bool,
+    start_type: Option<CodonType>,
+) {
+    {
         let reading_frame_index = position_index % READING_FRAMES;
 
-        if is_stop(encoded_sequence, position_index, training) {
+        if is_stop_codon {
             if context.has_start_codon[reading_frame_index] {
                 let node = create_stop_node(
                     context.last_stop_positions[reading_frame_index],
@@ -191,23 +346,20 @@ fn process_forward_strand(
             context.minimum_distances[reading_frame_index] = MINIMUM_GENE_LENGTH;
             context.last_stop_positions[reading_frame_index] = position_index;
             context.has_start_codon[reading_frame_index] = false;
-            continue;
-        }
-
-        if context.last_stop_positions[reading_frame_index] >= context.sequence_length {
-            continue;
-        }
-
-        // Check for start codons with unified logic
-        if let Some(codon_type) = check_start_codon(encoded_sequence, position_index, training) {
-            if is_valid_gene(
-                position_index,
-                context.last_stop_positions[reading_frame_index],
-                context.minimum_distances[reading_frame_index],
-                context.sequence_length,
-                context.circular,
-                masks,
-            ) {
+        } else if context.last_stop_positions[reading_frame_index] < context.sequence_length {
+            // A start codon that fails the length or mask checks still falls
+            // through to the edge-gene test, as in Prodigal.
+            let valid_start = start_type.filter(|_| {
+                is_valid_gene(
+                    position_index,
+                    context.last_stop_positions[reading_frame_index],
+                    context.minimum_distances[reading_frame_index],
+                    context.sequence_length,
+                    context.circular,
+                    masks,
+                )
+            });
+            if let Some(codon_type) = valid_start {
                 let node = create_start_node(
                     position_index,
                     codon_type,
@@ -216,20 +368,20 @@ fn process_forward_strand(
                 );
                 context.has_start_codon[reading_frame_index] = true;
                 nodes.push(node);
-            }
-        } else if is_edge_gene(
-            position_index,
-            context.last_stop_positions[reading_frame_index],
-            context.closed || context.circular,
-            masks,
-        ) {
-            let node = create_edge_node(
+            } else if is_edge_gene(
                 position_index,
-                context.last_stop_positions[reading_frame_index] as isize,
-                Strand::Forward,
-            );
-            context.has_start_codon[reading_frame_index] = true;
-            nodes.push(node);
+                context.last_stop_positions[reading_frame_index],
+                context.closed || context.circular,
+                masks,
+            ) {
+                let node = create_edge_node(
+                    position_index,
+                    context.last_stop_positions[reading_frame_index] as isize,
+                    Strand::Forward,
+                );
+                context.has_start_codon[reading_frame_index] = true;
+                nodes.push(node);
+            }
         }
     }
 }
@@ -241,17 +393,56 @@ fn process_reverse_strand(
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
+    codon_tables: &ByteCodonTable,
 ) {
-    let scanning_start_position = context.sequence_length.saturating_sub(CODON_LENGTH);
+    if context.sequence_length < CODON_LENGTH {
+        return;
+    }
+    let scanning_start_position = context.sequence_length - CODON_LENGTH;
 
-    for position_index in (0..=scanning_start_position).rev() {
+    let mut byte_index = scanning_start_position / POSITIONS_PER_BYTE;
+    loop {
+        let entry = codon_tables.entry(reverse_complement_encoded_sequence, byte_index);
+        let first_position = byte_index * POSITIONS_PER_BYTE;
+        let last_offset = (scanning_start_position - first_position).min(POSITIONS_PER_BYTE - 1);
+        if entry != 0 || first_position <= EDGE_POSITION_LIMIT {
+            for offset in (0..=last_offset).rev() {
+                let position_index = first_position + offset;
+                process_reverse_position(
+                    reverse_complement_encoded_sequence,
+                    nodes,
+                    context,
+                    masks,
+                    training,
+                    position_index,
+                    ByteCodonTable::is_stop(entry, offset),
+                    ByteCodonTable::start_type(entry, offset),
+                );
+            }
+        }
+        if byte_index == 0 {
+            break;
+        }
+        byte_index -= 1;
+    }
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn process_reverse_position(
+    reverse_complement_encoded_sequence: &[u8],
+    nodes: &mut Vec<Node>,
+    context: &mut StrandProcessingContext,
+    masks: &[Mask],
+    training: &Training,
+    position_index: usize,
+    is_stop_codon: bool,
+    start_type: Option<CodonType>,
+) {
+    {
         let reading_frame_index = position_index % READING_FRAMES;
 
-        if is_stop(
-            reverse_complement_encoded_sequence,
-            position_index,
-            training,
-        ) {
+        if is_stop_codon {
             if context.has_start_codon[reading_frame_index] {
                 let node = create_reverse_stop_node(
                     context.last_stop_positions[reading_frame_index],
@@ -266,27 +457,20 @@ fn process_reverse_strand(
             context.minimum_distances[reading_frame_index] = MINIMUM_GENE_LENGTH;
             context.last_stop_positions[reading_frame_index] = position_index;
             context.has_start_codon[reading_frame_index] = false;
-            continue;
-        }
-
-        if context.last_stop_positions[reading_frame_index] >= context.sequence_length {
-            continue;
-        }
-
-        // Check for start codons on reverse strand
-        if let Some(codon_type) = check_start_codon(
-            reverse_complement_encoded_sequence,
-            position_index,
-            training,
-        ) {
-            if is_valid_reverse_gene(
-                position_index,
-                context.last_stop_positions[reading_frame_index],
-                context.minimum_distances[reading_frame_index],
-                context.sequence_length,
-                context.circular,
-                masks,
-            ) {
+        } else if context.last_stop_positions[reading_frame_index] < context.sequence_length {
+            // A start codon that fails the length or mask checks still falls
+            // through to the edge-gene test, as in Prodigal.
+            let valid_start = start_type.filter(|_| {
+                is_valid_reverse_gene(
+                    position_index,
+                    context.last_stop_positions[reading_frame_index],
+                    context.minimum_distances[reading_frame_index],
+                    context.sequence_length,
+                    context.circular,
+                    masks,
+                )
+            });
+            if let Some(codon_type) = valid_start {
                 let node = create_reverse_start_node(
                     position_index,
                     codon_type,
@@ -296,22 +480,22 @@ fn process_reverse_strand(
 
                 context.has_start_codon[reading_frame_index] = true;
                 nodes.push(node);
-            }
-        } else if is_reverse_edge_gene(
-            position_index,
-            context.last_stop_positions[reading_frame_index],
-            context.sequence_length,
-            context.closed || context.circular,
-            masks,
-        ) {
-            let node = create_reverse_edge_node(
+            } else if is_reverse_edge_gene(
                 position_index,
-                context.last_stop_positions[reading_frame_index] as isize,
+                context.last_stop_positions[reading_frame_index],
                 context.sequence_length,
-            );
+                context.closed || context.circular,
+                masks,
+            ) {
+                let node = create_reverse_edge_node(
+                    position_index,
+                    context.last_stop_positions[reading_frame_index] as isize,
+                    context.sequence_length,
+                );
 
-            context.has_start_codon[reading_frame_index] = true;
-            nodes.push(node);
+                context.has_start_codon[reading_frame_index] = true;
+                nodes.push(node);
+            }
         }
     }
 }

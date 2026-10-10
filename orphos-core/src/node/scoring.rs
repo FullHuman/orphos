@@ -1,6 +1,6 @@
 use crate::{
     constants::{
-        CODING_SCORE_SENTINEL, CODING_SCORE_THRESHOLD, DICODON_SIZE, EDGE_BONUS,
+        CODING_SCORE_SENTINEL, CODING_SCORE_THRESHOLD, CODON_LENGTH, DICODON_SIZE, EDGE_BONUS,
         EDGE_POSITION_OFFSET, EDGE_POSITION_THRESHOLD, EDGE_UPSTREAM, GENE_SIZE_SCALING_FACTOR,
         LENGTH_FACTOR_MULTIPLIER, LENGTH_FACTOR_THRESHOLD, MAX_GENE_SIZE_CODONS,
         METAGENOMIC_LENGTH_THRESHOLD, METAGENOMIC_MIN_LENGTH_FACTOR, METAGENOMIC_PENALTY,
@@ -58,16 +58,10 @@ impl<'a> ScoringContext<'a> {
 /// Context struct containing scoring parameters and factors
 #[derive(Debug, Clone)]
 pub struct ScoringParams {
-    /// Edge upstream bonus factor
-    pub edge_upstream_bonus: f64,
     /// Edge bonus factor
     pub edge_bonus_factor: f64,
-    /// Penalty factor for various score adjustments
-    pub penalty_factor: f64,
     /// Cached start weight factor
     pub start_weight_factor: f64,
-    /// Cached metagenomic penalty coefficient
-    pub metagenomic_penalty_coeff: f64,
     /// Cached no-stop probability for length calculations
     pub no_stop_probability: f64,
 }
@@ -76,19 +70,13 @@ impl ScoringParams {
     /// Create scoring parameters from training data
     pub fn from_training(training: &Training) -> Self {
         let start_weight_factor = training.start_weight_factor;
-        let edge_upstream_bonus = EDGE_UPSTREAM * start_weight_factor;
         let edge_bonus_factor = EDGE_BONUS * start_weight_factor;
-        let penalty_factor = NEGATIVE_SCORE_PENALTY * edge_bonus_factor;
-        let metagenomic_penalty_coeff = METAGENOMIC_PENALTY / METAGENOMIC_PENALTY_DIVISOR;
         let no_stop_probability =
             calculate_no_stop_probability(training.gc_content, training.translation_table);
 
         Self {
-            edge_upstream_bonus,
             edge_bonus_factor,
-            penalty_factor,
             start_weight_factor,
-            metagenomic_penalty_coeff,
             no_stop_probability,
         }
     }
@@ -251,7 +239,8 @@ fn calculate_upstream_scores(
 
     // Apply edge upstream bonus using cached boundary check
     if !context.closed && cache.is_boundary_node {
-        node.scores.upstream_score += params.edge_upstream_bonus;
+        node.scores.upstream_score =
+            EDGE_UPSTREAM.mul_add(params.start_weight_factor, node.scores.upstream_score);
     }
 }
 
@@ -264,10 +253,14 @@ fn apply_edge_upstream_bonus_for_neighbors(
     current_index: usize,
     node_count: usize,
     params: &ScoringParams,
+    boundary_bonus_applied: bool,
 ) {
     let current_node = &nodes[current_index];
 
-    if current_node.position.is_edge {
+    // Prodigal applies the boundary bonus and the neighbour search as one
+    // if/else-if chain, so a node that received the boundary bonus is never
+    // searched.
+    if current_node.position.is_edge || boundary_bonus_applied {
         return;
     }
 
@@ -277,7 +270,10 @@ fn apply_edge_upstream_bonus_for_neighbors(
             if nodes[j].position.is_edge
                 && current_node.position.stop_value == nodes[j].position.stop_value
             {
-                nodes[current_index].scores.upstream_score += params.edge_upstream_bonus;
+                nodes[current_index].scores.upstream_score = EDGE_UPSTREAM.mul_add(
+                    params.start_weight_factor,
+                    nodes[current_index].scores.upstream_score,
+                );
                 break;
             }
         }
@@ -289,7 +285,10 @@ fn apply_edge_upstream_bonus_for_neighbors(
             if nodes[j].position.is_edge
                 && current_node.position.stop_value == nodes[j].position.stop_value
             {
-                nodes[current_index].scores.upstream_score += params.edge_upstream_bonus;
+                nodes[current_index].scores.upstream_score = EDGE_UPSTREAM.mul_add(
+                    params.start_weight_factor,
+                    nodes[current_index].scores.upstream_score,
+                );
                 break;
             }
         }
@@ -333,8 +332,10 @@ fn apply_penalties_and_bonuses(
     cache: &NodeCache,
 ) {
     // Apply penalty for starts with no stop codon - this happens AFTER boundary conversion
+    // (`uscore -= 0.5*EDGE_BONUS*st_wt`, one fused multiply-add in the reference build)
     if !node.position.is_edge && edge_gene == 1 {
-        node.scores.upstream_score -= params.penalty_factor;
+        node.scores.upstream_score = (-(NEGATIVE_SCORE_PENALTY * EDGE_BONUS))
+            .mul_add(params.start_weight_factor, node.scores.upstream_score);
     }
 
     // Apply short gene penalties/bonuses using cached factors
@@ -363,10 +364,13 @@ fn apply_penalties_and_bonuses(
     }
 
     // Apply metagenomic penalties using cached calculation
+    // (`cscore -= META_PEN*dmax(0, (3000-slen)/2700.0)`)
     if cache.needs_metagenomic_penalty && edge_gene == 0 {
-        let penalty = params.metagenomic_penalty_coeff
-            * (METAGENOMIC_LENGTH_THRESHOLD - context.encoded_sequence.sequence_length) as f64;
-        node.scores.coding_score -= penalty;
+        let shortfall = (METAGENOMIC_LENGTH_THRESHOLD as f64
+            - context.encoded_sequence.sequence_length as f64)
+            / METAGENOMIC_PENALTY_DIVISOR;
+        node.scores.coding_score =
+            (-METAGENOMIC_PENALTY).mul_add(shortfall.max(0.0), node.scores.coding_score);
     }
 
     // Base start score calculation - this happens in C code at line 498
@@ -382,7 +386,8 @@ fn apply_penalties_and_bonuses(
                 node.scores.start_score -= params.start_weight_factor;
             } else {
                 // C: nod[i].sscore -= (10.31 - 0.004*slen);
-                let penalty = 10.31 - 0.004 * context.encoded_sequence.sequence_length as f64;
+                let penalty =
+                    (-0.004_f64).mul_add(context.encoded_sequence.sequence_length as f64, 10.31);
                 node.scores.start_score -= penalty;
             }
         } else if context.is_meta
@@ -426,6 +431,33 @@ pub fn score_nodes(
     closed: bool,
     is_meta: bool,
 ) -> Result<(), OrphosError> {
+    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, true)
+}
+
+/// [`score_nodes`] for nodes whose ORF GC content ([`calc_orf_gc`]) has
+/// already been computed and is still valid.
+///
+/// The GC content only depends on the node positions and the sequence, so
+/// when the same nodes are scored with several training sets (metagenomic
+/// mode) it needs to be computed once.
+pub fn score_nodes_with_orf_gc(
+    encoded_sequence: &EncodedSequence,
+    nodes: &mut [Node],
+    training: &Training,
+    closed: bool,
+    is_meta: bool,
+) -> Result<(), OrphosError> {
+    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, false)
+}
+
+fn score_nodes_impl(
+    encoded_sequence: &EncodedSequence,
+    nodes: &mut [Node],
+    training: &Training,
+    closed: bool,
+    is_meta: bool,
+    compute_orf_gc: bool,
+) -> Result<(), OrphosError> {
     let node_count = nodes.len();
 
     // Early exit for empty nodes
@@ -437,11 +469,13 @@ pub fn score_nodes(
     let context = ScoringContext::new(encoded_sequence, training, closed, is_meta);
     let params = ScoringParams::from_training(training);
 
-    calc_orf_gc(
-        &encoded_sequence.forward_sequence,
-        encoded_sequence.sequence_length,
-        nodes,
-    );
+    if compute_orf_gc {
+        calc_orf_gc(
+            &encoded_sequence.forward_sequence,
+            encoded_sequence.sequence_length,
+            nodes,
+        );
+    }
     raw_coding_score_optimized(
         &encoded_sequence.forward_sequence,
         &encoded_sequence.reverse_complement_sequence,
@@ -496,7 +530,14 @@ pub fn score_nodes(
         calculate_upstream_scores(&mut nodes[i], &context, &params, &cache);
 
         // Apply edge upstream bonus based on neighboring nodes
-        apply_edge_upstream_bonus_for_neighbors(nodes, i, node_count, &params);
+        let boundary_bonus_applied = !context.closed && cache.is_boundary_node;
+        apply_edge_upstream_bonus_for_neighbors(
+            nodes,
+            i,
+            node_count,
+            &params,
+            boundary_bonus_applied,
+        );
 
         // Convert boundary nodes to edge genes if necessary
         convert_boundary_nodes_to_edge_genes(
@@ -542,10 +583,12 @@ fn score_upstream_composition(seq: &[u8], node: &Node, context: &ScoringContext)
         // Get the nucleotide index at position
         let mer_idx = calculate_kmer_index(1, seq, pos);
 
-        // Add to upstream score
-        upstream_score += UPSTREAM_COMPOSITION_WEIGHT
-            * context.training.start_weight_factor
-            * context.training.upstream_composition[count][mer_idx];
+        // Add to upstream score (`uscore += 0.4*st_wt*ups_comp[..]`, fused)
+        upstream_score = (UPSTREAM_COMPOSITION_WEIGHT * context.training.start_weight_factor)
+            .mul_add(
+                context.training.upstream_composition[count][mer_idx],
+                upstream_score,
+            );
         count += 1;
     }
     upstream_score
@@ -645,11 +688,13 @@ fn process_strand_first_pass(
                 // Calculate dicodon scores from last stop to current start
                 if last_positions[frame_index] >= 3 {
                     let mut j = last_positions[frame_index] - 3;
+                    let mut previous_mer = None;
                     loop {
                         if j < nodes[i].position.index {
                             break;
                         }
-                        let mer_idx = calculate_kmer_index(DICODON_SIZE, encoded_sequence, j);
+                        let mer_idx = next_dicodon_index(encoded_sequence, j, previous_mer);
+                        previous_mer = Some(mer_idx);
                         let dicodon_score = training.gene_dicodon_table[mer_idx];
                         frame_scores[frame_index] += dicodon_score;
 
@@ -678,10 +723,12 @@ fn process_strand_first_pass(
             } else {
                 // Calculate dicodon scores from last stop to current start
                 let mut j = last_positions[frame_index] + 3;
+                let mut previous_mer = None;
                 while j <= node.position.index {
                     let reverse_seq_pos = sequence_length - j - 1;
                     let mer_idx =
-                        calculate_kmer_index(DICODON_SIZE, encoded_sequence, reverse_seq_pos);
+                        next_dicodon_index(encoded_sequence, reverse_seq_pos, previous_mer);
+                    previous_mer = Some(mer_idx);
                     let dicodon_score = training.gene_dicodon_table[mer_idx];
                     frame_scores[frame_index] += dicodon_score;
                     j += 3;
@@ -692,6 +739,22 @@ fn process_strand_first_pass(
         }
     }
 }
+
+/// Dicodon index at `position`, reusing the second codon of the dicodon that
+/// was read three bases downstream (`previous`), so that walking an ORF codon
+/// by codon reads every base once.
+#[inline]
+fn next_dicodon_index(encoded_sequence: &[u8], position: usize, previous: Option<usize>) -> usize {
+    match previous {
+        Some(previous) => {
+            calculate_kmer_index(CODON_LENGTH, encoded_sequence, position)
+                | ((previous & CODON_INDEX_MASK) << (2 * CODON_LENGTH))
+        }
+        None => calculate_kmer_index(DICODON_SIZE, encoded_sequence, position),
+    }
+}
+
+const CODON_INDEX_MASK: usize = (1 << (2 * CODON_LENGTH)) - 1;
 
 /// Process nodes for a specific strand in the second pass (score normalization)
 ///
@@ -741,24 +804,29 @@ fn process_strand_second_pass(nodes: &mut [Node], strand: Strand, frame_scores: 
 ///
 /// This implements the biological principle that very short or very long genes
 /// are less likely to be real genes
+///
+/// Powers use `powf` (libm `pow`) rather than `powi`: Prodigal calls `pow`
+/// for the integer exponents too, and the two round differently.
 fn calculate_length_factor(gene_size_codons: f64, no_stop_probability: f64) -> f64 {
-    if gene_size_codons > MAX_GENE_SIZE_CODONS as f64 {
+    let max_codons = MAX_GENE_SIZE_CODONS as f64;
+    let min_codons = MIN_GENE_SIZE_CODONS as f64;
+    if gene_size_codons > max_codons {
         // For very long genes, use a scaled length factor
-        let mut factor = ((1.0 - no_stop_probability.powi(MAX_GENE_SIZE_CODONS))
-            / no_stop_probability.powi(MAX_GENE_SIZE_CODONS))
+        let mut factor = ((1.0 - no_stop_probability.powf(max_codons))
+            / no_stop_probability.powf(max_codons))
         .ln();
-        factor -= ((1.0 - no_stop_probability.powi(MIN_GENE_SIZE_CODONS))
-            / no_stop_probability.powi(MIN_GENE_SIZE_CODONS))
+        factor -= ((1.0 - no_stop_probability.powf(min_codons))
+            / no_stop_probability.powf(min_codons))
         .ln();
-        factor *= (gene_size_codons - MIN_GENE_SIZE_CODONS as f64) / GENE_SIZE_SCALING_FACTOR;
+        factor *= (gene_size_codons - min_codons) / GENE_SIZE_SCALING_FACTOR;
         factor
     } else {
         // For normal-sized genes, use direct calculation
         let mut factor = ((1.0 - no_stop_probability.powf(gene_size_codons))
             / no_stop_probability.powf(gene_size_codons))
         .ln();
-        factor -= ((1.0 - no_stop_probability.powi(MIN_GENE_SIZE_CODONS))
-            / no_stop_probability.powi(MIN_GENE_SIZE_CODONS))
+        factor -= ((1.0 - no_stop_probability.powf(min_codons))
+            / no_stop_probability.powf(min_codons))
         .ln();
         factor
     }
