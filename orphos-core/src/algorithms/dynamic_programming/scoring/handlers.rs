@@ -585,12 +585,13 @@ fn handle_overlapping_opposite(
     Some(connection_state)
 }
 
+/// `bias[0]*gc[0] + bias[1]*gc[1] + bias[2]*gc[2]`, evaluated with the
+/// fused multiply-adds the reference Prodigal build uses for this expression
+/// (see the crate documentation on floating-point contraction).
 fn calculate_gc_score(node: &Node, training: &Training) -> f64 {
-    let part1 = training.gc_bias_factors[0] * node.scores.gc_frame_scores[0];
-    let part2 = training.gc_bias_factors[1] * node.scores.gc_frame_scores[1];
-    let part3 = training.gc_bias_factors[2] * node.scores.gc_frame_scores[2];
-
-    part1 + part2 + part3
+    let bias = &training.gc_bias_factors;
+    let gc = &node.scores.gc_frame_scores;
+    bias[2].mul_add(gc[2], bias[0].mul_add(gc[0], bias[1] * gc[1]))
 }
 
 #[cfg(test)]

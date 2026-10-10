@@ -41,22 +41,16 @@ fn process_forward_strand(
                     .for_each(|count| *count = 0);
                 last_position[frame_index] = node.position.index;
 
-                if let Some(&gc_value) = gc_frame_data.get(node.position.index)
-                    && gc_value >= 0
-                {
-                    let gc_index = (gc_value as usize + frame_offset) % 3;
-                    frame_counts[frame_index][gc_index] = 1;
+                if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
+                    frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] = 1;
                 }
             } else {
                 if last_position[frame_index] >= 3 {
                     let mut position = last_position[frame_index] - 3;
 
                     while position >= node.position.index {
-                        if let Some(&gc_value) = gc_frame_data.get(position)
-                            && gc_value >= 0
-                        {
-                            let gc_index = (gc_value as usize + frame_offset) % 3;
-                            frame_counts[frame_index][gc_index] += 1;
+                        if let Some(&gc_value) = gc_frame_data.get(position) {
+                            frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] += 1;
                         }
 
                         if position < 3 {
@@ -92,21 +86,15 @@ fn process_reverse_strand(
                     .for_each(|count| *count = 0);
                 last_position[frame_index] = node.position.index;
 
-                if let Some(&gc_value) = gc_frame_data.get(node.position.index)
-                    && gc_value >= 0
-                {
-                    let gc_index = ((3 - gc_value as usize) + frame_index) % 3;
-                    frame_counts[frame_index][gc_index] = 1;
+                if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
+                    frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] = 1;
                 }
             } else {
                 let mut position = last_position[frame_index] + 3;
 
                 while position <= node.position.index && position < gc_frame_data.len() {
-                    if let Some(&gc_value) = gc_frame_data.get(position)
-                        && gc_value >= 0
-                    {
-                        let gc_index = ((3 - gc_value as usize) + frame_index) % 3;
-                        frame_counts[frame_index][gc_index] += 1;
+                    if let Some(&gc_value) = gc_frame_data.get(position) {
+                        frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] += 1;
                     }
                     position += 3;
                 }
@@ -115,6 +103,22 @@ fn process_reverse_strand(
                 last_position[frame_index] = node.position.index;
             }
         });
+}
+
+/// Frame-count bin of a forward-strand position with GC frame value `gc_value`.
+///
+/// The frame plot marks the last one or two bases of a sequence (which do not
+/// start a full codon) with `-1`; Prodigal feeds that value through the same
+/// modular arithmetic as real frames, so those positions still count.
+#[inline]
+const fn forward_gc_bin(gc_value: i32, frame_offset: usize) -> usize {
+    (gc_value + frame_offset as i32).rem_euclid(3) as usize
+}
+
+/// Frame-count bin of a reverse-strand position (see [`forward_gc_bin`]).
+#[inline]
+const fn reverse_gc_bin(gc_value: i32, frame_index: usize) -> usize {
+    ((3 - gc_value) + frame_index as i32).rem_euclid(3) as usize
 }
 
 /// Calculate training bias from processed nodes

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Single-genome predictions are now byte-identical to Prodigal: the GC frame
+  bias counted the last one or two bases of a sequence differently, the
+  coding-score length factor used `powi` where Prodigal uses `pow`, ORF GC
+  content ignored a trailing partial codon on the reverse strand, start
+  tweaking ranked alternatives differently from `tweak_final_starts`, and the
+  metagenomic coding penalty was rounded differently. Expressions that the
+  reference Prodigal build evaluates with fused multiply-adds (GC frame
+  score, intergenic modifier, upstream composition, edge bonuses, start
+  training scores) now use `mul_add` so near-ties resolve identically.
+- Metagenomic predictions match Prodigal's master branch (which fixes a 2.6.3
+  typo that applied the short-gene penalty to every gene) and pyrodigal.
+- Added `TrainedOrphos::training()` to access the trained model.
+
 ### Changed
 
 - Rewrote the dynamic-programming inner loop to visit only compatible source

@@ -347,25 +347,27 @@ fn process_forward_position(
             context.last_stop_positions[reading_frame_index] = position_index;
             context.has_start_codon[reading_frame_index] = false;
         } else if context.last_stop_positions[reading_frame_index] < context.sequence_length {
-            // Check for start codons with unified logic
-            if let Some(codon_type) = start_type {
-                if is_valid_gene(
+            // A start codon that fails the length or mask checks still falls
+            // through to the edge-gene test, as in Prodigal.
+            let valid_start = start_type.filter(|_| {
+                is_valid_gene(
                     position_index,
                     context.last_stop_positions[reading_frame_index],
                     context.minimum_distances[reading_frame_index],
                     context.sequence_length,
                     context.circular,
                     masks,
-                ) {
-                    let node = create_start_node(
-                        position_index,
-                        codon_type,
-                        context.last_stop_positions[reading_frame_index] as isize,
-                        Strand::Forward,
-                    );
-                    context.has_start_codon[reading_frame_index] = true;
-                    nodes.push(node);
-                }
+                )
+            });
+            if let Some(codon_type) = valid_start {
+                let node = create_start_node(
+                    position_index,
+                    codon_type,
+                    context.last_stop_positions[reading_frame_index] as isize,
+                    Strand::Forward,
+                );
+                context.has_start_codon[reading_frame_index] = true;
+                nodes.push(node);
             } else if is_edge_gene(
                 position_index,
                 context.last_stop_positions[reading_frame_index],
@@ -456,26 +458,28 @@ fn process_reverse_position(
             context.last_stop_positions[reading_frame_index] = position_index;
             context.has_start_codon[reading_frame_index] = false;
         } else if context.last_stop_positions[reading_frame_index] < context.sequence_length {
-            // Check for start codons on reverse strand
-            if let Some(codon_type) = start_type {
-                if is_valid_reverse_gene(
+            // A start codon that fails the length or mask checks still falls
+            // through to the edge-gene test, as in Prodigal.
+            let valid_start = start_type.filter(|_| {
+                is_valid_reverse_gene(
                     position_index,
                     context.last_stop_positions[reading_frame_index],
                     context.minimum_distances[reading_frame_index],
                     context.sequence_length,
                     context.circular,
                     masks,
-                ) {
-                    let node = create_reverse_start_node(
-                        position_index,
-                        codon_type,
-                        context.last_stop_positions[reading_frame_index] as isize,
-                        context.sequence_length,
-                    );
+                )
+            });
+            if let Some(codon_type) = valid_start {
+                let node = create_reverse_start_node(
+                    position_index,
+                    codon_type,
+                    context.last_stop_positions[reading_frame_index] as isize,
+                    context.sequence_length,
+                );
 
-                    context.has_start_codon[reading_frame_index] = true;
-                    nodes.push(node);
-                }
+                context.has_start_codon[reading_frame_index] = true;
+                nodes.push(node);
             } else if is_reverse_edge_gene(
                 position_index,
                 context.last_stop_positions[reading_frame_index],

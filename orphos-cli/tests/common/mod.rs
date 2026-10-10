@@ -25,6 +25,19 @@ pub fn sha256_hex(input: impl AsRef<[u8]>) -> String {
     hex
 }
 
+/// Path of the reference Prodigal binary: `$ORPHOS_PRODIGAL_BIN` if set,
+/// otherwise `prodigal` from `PATH`.
+///
+/// The 2.6.3 release carries a few bugs fixed on Prodigal's master branch
+/// (short-gene penalty applied to every metagenomic gene, uninitialised
+/// Shine-Dalgarno buffers, undefined behaviour in gene data formatting).
+/// Orphos implements the fixed behaviour, so pointing this at a build of
+/// upstream master yields byte-identical output; 2.6.3 differs for a handful
+/// of metagenomic genes.
+pub fn prodigal_binary() -> String {
+    std::env::var("ORPHOS_PRODIGAL_BIN").unwrap_or_else(|_| "prodigal".to_string())
+}
+
 /// Runs the original prodigal with given arguments
 pub fn run_original_prodigal(
     input_file: &str,
@@ -32,7 +45,7 @@ pub fn run_original_prodigal(
     format: &str,
     mode: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = process::Command::new("prodigal");
+    let mut cmd = process::Command::new(prodigal_binary());
     cmd.arg("-i")
         .arg(input_file)
         .arg("-o")
@@ -94,7 +107,10 @@ pub fn prodigal_available() -> bool {
     // Attempt a sequence of lightweight invocations; treat any successful spawn as availability.
     const CANDIDATE_ARGS: &[&[&str]] = &[&["-v"], &["-h"], &["--help"], &[]];
     for args in CANDIDATE_ARGS {
-        match std::process::Command::new("prodigal").args(*args).output() {
+        match std::process::Command::new(prodigal_binary())
+            .args(*args)
+            .output()
+        {
             Ok(output) => {
                 if output.status.success()
                     || String::from_utf8_lossy(&output.stdout).contains("Prodigal")

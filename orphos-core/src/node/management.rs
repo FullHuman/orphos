@@ -232,8 +232,10 @@ fn accumulate_gc_forward(gc_prefix: &[u32], current_index: usize, last_index: us
 }
 
 /// G/C count of the codons `last_index + 3, last_index + 6, ...` up to
-/// `current_index` (and within the sequence), i.e. of the bases in
-/// `[last_index + 3, last_index + 3 + 3k)` for the `k` codons that fit.
+/// `current_index`, i.e. of the bases in `[last_index + 3, last_index + 3 + 3k)`
+/// for the `k` codons starting at or before `current_index`. A codon that
+/// runs past the end of the sequence contributes its existing bases, as in
+/// Prodigal, where the bases past the end read as `A`.
 fn accumulate_gc_reverse(
     gc_prefix: &[u32],
     sequence_length: usize,
@@ -245,12 +247,12 @@ fn accumulate_gc_reverse(
     }
 
     let start = last_index + 3;
-    let end = current_index.min(sequence_length.saturating_sub(3));
-    if end < start {
+    if start >= sequence_length {
         return 0.0;
     }
-    let codons = (end - start) / 3 + 1;
-    f64::from(gc_prefix[start + 3 * codons] - gc_prefix[start])
+    let codons = (current_index - start) / 3 + 1;
+    let end = (start + 3 * codons).min(sequence_length);
+    f64::from(gc_prefix[end] - gc_prefix[start])
 }
 
 const fn calculate_orf_length(stop_value: isize, index: usize) -> f64 {
@@ -457,9 +459,8 @@ mod tests {
             return 0.0;
         }
         let mut gc_count = 0.0;
-        let end = current_index.min(sequence_length.saturating_sub(3));
         let mut j = last_index + 3;
-        while j <= end && j < sequence_length {
+        while j <= current_index && j < sequence_length {
             gc_count += calculate_triplet_gc(encoded_sequence, sequence_length, j);
             j += 3;
         }

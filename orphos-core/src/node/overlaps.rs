@@ -135,11 +135,13 @@ pub fn intergenic_mod_values(n1: IntergenicNode, n2: IntergenicNode, training: &
     }
 
     // Apply distance-based bonuses/penalties
+    // Both updates are `rval ± x * start_weight`, which the reference
+    // Prodigal build evaluates as a single fused multiply-add.
     if dist > 3.0 * OPERON_DISTANCE || n1.strand != n2.strand {
-        rval -= OVERLAP_PENALTY_FACTOR * training.start_weight_factor;
+        rval = (-OVERLAP_PENALTY_FACTOR).mul_add(training.start_weight_factor, rval);
     } else if (dist <= OPERON_DISTANCE && !ovlp) || dist < OPERON_DISTANCE / 4.0 {
-        rval +=
-            (2.0 - dist / OPERON_DISTANCE) * OVERLAP_PENALTY_FACTOR * training.start_weight_factor;
+        rval = ((2.0 - dist / OPERON_DISTANCE) * OVERLAP_PENALTY_FACTOR)
+            .mul_add(training.start_weight_factor, rval);
     }
 
     rval

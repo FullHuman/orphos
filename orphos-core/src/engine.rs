@@ -382,6 +382,12 @@ impl TrainedOrphos {
         }
     }
 
+    /// The training data used for gene finding, if any.
+    #[must_use]
+    pub const fn training(&self) -> Option<&Training> {
+        self.training.as_ref()
+    }
+
     /// Finds genes in a single genome sequence using the trained model.
     ///
     /// Uses dynamic programming to find the optimal set of non-overlapping genes

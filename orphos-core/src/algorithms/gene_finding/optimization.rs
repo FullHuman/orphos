@@ -105,15 +105,11 @@ impl<'a> GeneBuilder<'a> {
             }
         }
 
-        // collect best two alternative starts sharing stop within SEARCH_WINDOW
+        // Search upstream and downstream for the #2 and #3 scoring starts
+        // that share this gene's stop (Prodigal scans +/-100 node indices).
         let mut alt_idx: [Option<usize>; 2] = [None, None];
-        let mut alt_score: [f64; 2] = [f64::MIN, f64::MIN];
+        let mut alt_score: [f64; 2] = [0.0, 0.0];
         let mut alt_igm: [f64; 2] = [0.0, 0.0];
-        // NOTE: The original C code scans +/-100 node indices around the current start.
-        // Differences in node ordering in this Rust port can cause legitimate
-        // alternative (e.g. edge) starts to fall outside that local window.
-        // To preserve correctness we scan the full node array for starts with
-        // the same stop_value. This can be optimized later if needed.
         let win_start = current_idx.saturating_sub(SEARCH_WINDOW);
         let win_end = (current_idx + SEARCH_WINDOW).min(self.nodes.len());
         for j in win_start..win_end {
@@ -188,73 +184,82 @@ impl<'a> GeneBuilder<'a> {
                 continue;
             }
 
+            // Prodigal ranks candidates by `score + tigm` against the stored
+            // raw score of the current best (without its modifier).
             let score = node.scores.coding_score + node.scores.start_score;
-            if alt_idx[0].is_none() || score + tigm > alt_score[0] + alt_igm[0] {
+            if alt_idx[0].is_none() {
+                alt_idx[0] = Some(j);
+                alt_score[0] = score;
+                alt_igm[0] = tigm;
+            } else if score + tigm > alt_score[0] {
                 alt_idx[1] = alt_idx[0];
                 alt_score[1] = alt_score[0];
                 alt_igm[1] = alt_igm[0];
                 alt_idx[0] = Some(j);
                 alt_score[0] = score;
                 alt_igm[0] = tigm;
-            } else if alt_idx[1].is_none() || score + tigm > alt_score[1] + alt_igm[1] {
+            } else if alt_idx[1].is_none() || score + tigm > alt_score[1] {
                 alt_idx[1] = Some(j);
                 alt_score[1] = score;
                 alt_igm[1] = tigm;
             }
         }
 
-        // adjust alternative scores per C rules
+        // Adjust the alternatives' scores as Prodigal does.
         for k in 0..2 {
-            if let Some(idx) = alt_idx[k] {
-                let node = &self.nodes[idx];
-                let dist = node.position.index.abs_diff(current.position.index);
-                // Edge promotion: if alternative is edge and current is not, keep raw score (do not penalize)
-                if node.position.is_edge && !current.position.is_edge {
-                    // leave alt_score as coding+start (already set)
-                    continue;
+            let Some(idx) = alt_idx[k] else {
+                continue;
+            };
+            let node = &self.nodes[idx];
+            let dist = node.position.index.abs_diff(current.position.index);
+            if node.scores.type_score < current.scores.type_score
+                && alt_score[k] - node.scores.type_score
+                    >= current_score - current.scores.type_score + self.training.start_weight_factor
+                && node.scores.ribosome_binding_score > current.scores.ribosome_binding_score
+                && node.scores.upstream_score > current.scores.upstream_score
+                && node.scores.coding_score > current.scores.coding_score
+                && dist > MAX_RIBOSOME_DISTANCE
+            {
+                // Start of a less common type but with better coding, RBS and
+                // upstream, at least 18 bases away from the original.
+                alt_score[k] += current.scores.type_score - node.scores.type_score;
+            } else if dist <= MAX_RIBOSOME_DISTANCE
+                && node.scores.ribosome_binding_score + node.scores.type_score
+                    > current.scores.ribosome_binding_score + current.scores.type_score
+                && !current.position.is_edge
+                && !node.position.is_edge
+            {
+                // Close starts: ignore coding and see if the start has a
+                // better RBS and type.
+                if current.scores.coding_score > node.scores.coding_score {
+                    alt_score[k] += current.scores.coding_score - node.scores.coding_score;
                 }
-                if node.scores.type_score < current.scores.type_score
-                    && alt_score[k] - node.scores.type_score
-                        >= current_score - current.scores.type_score
-                            + self.training.start_weight_factor
-                    && node.scores.ribosome_binding_score > current.scores.ribosome_binding_score
-                    && node.scores.upstream_score > current.scores.upstream_score
-                    && node.scores.coding_score > current.scores.coding_score
-                    && dist > MAX_RIBOSOME_DISTANCE
-                {
-                    alt_score[k] += current.scores.type_score - node.scores.type_score; // rule 1
-                } else if dist <= MAX_RIBOSOME_DISTANCE
-                    && node.scores.ribosome_binding_score + node.scores.type_score
-                        > current.scores.ribosome_binding_score + current.scores.type_score
-                    && !current.position.is_edge
-                    && !node.position.is_edge
-                {
-                    if current.scores.coding_score > node.scores.coding_score {
-                        alt_score[k] += current.scores.coding_score - node.scores.coding_score;
-                    }
-                    if current.scores.upstream_score > node.scores.upstream_score {
-                        alt_score[k] += current.scores.upstream_score - node.scores.upstream_score;
-                    }
-                    if igm > alt_igm[k] {
-                        alt_score[k] += igm - alt_igm[k];
-                    }
-                } else if !node.position.is_edge || current.position.is_edge {
-                    // only penalize if not the protected edge promotion case
-                    alt_score[k] = -1000.0;
+                if current.scores.upstream_score > node.scores.upstream_score {
+                    alt_score[k] += current.scores.upstream_score - node.scores.upstream_score;
                 }
+                if igm > alt_igm[k] {
+                    alt_score[k] += igm - alt_igm[k];
+                }
+            } else {
+                alt_score[k] = -1000.0;
             }
         }
 
-        // pick best improved alternative
+        // Change the start to the best improved alternative, if any.
         let mut best: Option<usize> = None;
         for k in 0..2 {
-            if alt_idx[k].is_some() && alt_score[k] + alt_igm[k] > current_score + igm {
-                match best {
-                    None => best = Some(k),
-                    Some(b) => {
-                        if alt_score[k] + alt_igm[k] > alt_score[b] + alt_igm[b] {
-                            best = Some(k);
-                        }
+            if alt_idx[k].is_none() {
+                continue;
+            }
+            match best {
+                None => {
+                    if alt_score[k] + alt_igm[k] > current_score + igm {
+                        best = Some(k);
+                    }
+                }
+                Some(b) => {
+                    if alt_score[k] + alt_igm[k] > alt_score[b] + alt_igm[b] {
+                        best = Some(k);
                     }
                 }
             }
@@ -264,16 +269,9 @@ impl<'a> GeneBuilder<'a> {
         {
             self.apply_alternative_start(gene_index, new_idx);
         }
-
-        // Optional debug dump for first gene: list all candidate starts with same stop
-        // (debug instrumentation removed)
     }
 
     fn apply_alternative_start(&mut self, gene_index: usize, new_start_idx: usize) {
-        // Allow promotion to an edge start; only skip if the alternative is identical.
-        if self.genes[gene_index].coordinates.start_index == new_start_idx {
-            return;
-        }
         self.genes[gene_index].coordinates.start_index = new_start_idx;
         let node = &self.nodes[new_start_idx];
         if node.position.strand == Strand::Forward {
