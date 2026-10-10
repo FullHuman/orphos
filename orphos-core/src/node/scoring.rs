@@ -1,6 +1,6 @@
 use crate::{
     constants::{
-        CODING_SCORE_SENTINEL, CODING_SCORE_THRESHOLD, DICODON_SIZE, EDGE_BONUS,
+        CODING_SCORE_SENTINEL, CODING_SCORE_THRESHOLD, CODON_LENGTH, DICODON_SIZE, EDGE_BONUS,
         EDGE_POSITION_OFFSET, EDGE_POSITION_THRESHOLD, EDGE_UPSTREAM, GENE_SIZE_SCALING_FACTOR,
         LENGTH_FACTOR_MULTIPLIER, LENGTH_FACTOR_THRESHOLD, MAX_GENE_SIZE_CODONS,
         METAGENOMIC_LENGTH_THRESHOLD, METAGENOMIC_MIN_LENGTH_FACTOR, METAGENOMIC_PENALTY,
@@ -426,6 +426,33 @@ pub fn score_nodes(
     closed: bool,
     is_meta: bool,
 ) -> Result<(), OrphosError> {
+    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, true)
+}
+
+/// [`score_nodes`] for nodes whose ORF GC content ([`calc_orf_gc`]) has
+/// already been computed and is still valid.
+///
+/// The GC content only depends on the node positions and the sequence, so
+/// when the same nodes are scored with several training sets (metagenomic
+/// mode) it needs to be computed once.
+pub fn score_nodes_with_orf_gc(
+    encoded_sequence: &EncodedSequence,
+    nodes: &mut [Node],
+    training: &Training,
+    closed: bool,
+    is_meta: bool,
+) -> Result<(), OrphosError> {
+    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, false)
+}
+
+fn score_nodes_impl(
+    encoded_sequence: &EncodedSequence,
+    nodes: &mut [Node],
+    training: &Training,
+    closed: bool,
+    is_meta: bool,
+    compute_orf_gc: bool,
+) -> Result<(), OrphosError> {
     let node_count = nodes.len();
 
     // Early exit for empty nodes
@@ -437,11 +464,13 @@ pub fn score_nodes(
     let context = ScoringContext::new(encoded_sequence, training, closed, is_meta);
     let params = ScoringParams::from_training(training);
 
-    calc_orf_gc(
-        &encoded_sequence.forward_sequence,
-        encoded_sequence.sequence_length,
-        nodes,
-    );
+    if compute_orf_gc {
+        calc_orf_gc(
+            &encoded_sequence.forward_sequence,
+            encoded_sequence.sequence_length,
+            nodes,
+        );
+    }
     raw_coding_score_optimized(
         &encoded_sequence.forward_sequence,
         &encoded_sequence.reverse_complement_sequence,
@@ -645,11 +674,13 @@ fn process_strand_first_pass(
                 // Calculate dicodon scores from last stop to current start
                 if last_positions[frame_index] >= 3 {
                     let mut j = last_positions[frame_index] - 3;
+                    let mut previous_mer = None;
                     loop {
                         if j < nodes[i].position.index {
                             break;
                         }
-                        let mer_idx = calculate_kmer_index(DICODON_SIZE, encoded_sequence, j);
+                        let mer_idx = next_dicodon_index(encoded_sequence, j, previous_mer);
+                        previous_mer = Some(mer_idx);
                         let dicodon_score = training.gene_dicodon_table[mer_idx];
                         frame_scores[frame_index] += dicodon_score;
 
@@ -678,10 +709,12 @@ fn process_strand_first_pass(
             } else {
                 // Calculate dicodon scores from last stop to current start
                 let mut j = last_positions[frame_index] + 3;
+                let mut previous_mer = None;
                 while j <= node.position.index {
                     let reverse_seq_pos = sequence_length - j - 1;
                     let mer_idx =
-                        calculate_kmer_index(DICODON_SIZE, encoded_sequence, reverse_seq_pos);
+                        next_dicodon_index(encoded_sequence, reverse_seq_pos, previous_mer);
+                    previous_mer = Some(mer_idx);
                     let dicodon_score = training.gene_dicodon_table[mer_idx];
                     frame_scores[frame_index] += dicodon_score;
                     j += 3;
@@ -692,6 +725,22 @@ fn process_strand_first_pass(
         }
     }
 }
+
+/// Dicodon index at `position`, reusing the second codon of the dicodon that
+/// was read three bases downstream (`previous`), so that walking an ORF codon
+/// by codon reads every base once.
+#[inline]
+fn next_dicodon_index(encoded_sequence: &[u8], position: usize, previous: Option<usize>) -> usize {
+    match previous {
+        Some(previous) => {
+            calculate_kmer_index(CODON_LENGTH, encoded_sequence, position)
+                | ((previous & CODON_INDEX_MASK) << (2 * CODON_LENGTH))
+        }
+        None => calculate_kmer_index(DICODON_SIZE, encoded_sequence, position),
+    }
+}
+
+const CODON_INDEX_MASK: usize = (1 << (2 * CODON_LENGTH)) - 1;
 
 /// Process nodes for a specific strand in the second pass (score normalization)
 ///

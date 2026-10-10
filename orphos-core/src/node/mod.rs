@@ -18,9 +18,11 @@ pub use creation::add_nodes;
 pub use dicodon::calculate_dicodon_gene;
 pub use management::*;
 pub use motifs::{find_best_upstream_motif, rbs_score};
-pub use overlaps::{intergenic_mod, record_overlapping_starts};
+pub use overlaps::{
+    IntergenicNode, intergenic_mod, intergenic_mod_values, record_overlapping_starts,
+};
 pub use record_gc_bias::record_gc_bias;
-pub use scoring::{raw_coding_score, score_nodes};
+pub use scoring::{raw_coding_score, score_nodes, score_nodes_with_orf_gc};
 pub use utilities::{reset_node_scores, sort_nodes_by_position};
 
 #[cfg(test)]

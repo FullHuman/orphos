@@ -28,19 +28,32 @@ pub fn reset_node_scores(nodes: &mut [Node]) {
 /// Sorts nodes first by sequence position, then by strand (forward before reverse).
 /// This ordering is critical for dynamic programming algorithms that process
 /// nodes in genomic order.
-pub fn sort_nodes_by_position(nodes: &mut [Node]) {
-    nodes.sort_unstable_by(|a, b| {
-        let ndx_cmp = a.position.index.cmp(&b.position.index);
-        if ndx_cmp != std::cmp::Ordering::Equal {
-            return ndx_cmp;
-        }
+pub fn sort_nodes_by_position(nodes: &mut Vec<Node>) {
+    // Nodes are large, so sort a compact key array and gather the nodes once
+    // instead of moving them while sorting. Keys are unique for nodes created
+    // by `add_nodes`, which makes the order fully determined.
+    let mut keys: Vec<(u64, u32)> = nodes
+        .iter()
+        .enumerate()
+        .map(|(original, node)| {
+            let strand_rank = match node.position.strand {
+                Strand::Forward => 0,
+                Strand::Unknown => 1,
+                Strand::Reverse => 2,
+            };
+            (
+                (node.position.index as u64) << 2 | strand_rank,
+                original as u32,
+            )
+        })
+        .collect();
+    keys.sort_unstable();
 
-        match (a.position.strand, b.position.strand) {
-            (Strand::Forward, Strand::Reverse) => std::cmp::Ordering::Less,
-            (Strand::Reverse, Strand::Forward) => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
-        }
-    });
+    let sorted: Vec<Node> = keys
+        .iter()
+        .map(|&(_, original)| nodes[original as usize].clone())
+        .collect();
+    *nodes = sorted;
 }
 #[cfg(test)]
 mod tests {

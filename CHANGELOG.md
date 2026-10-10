@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Rewrote the dynamic-programming inner loop to visit only compatible source
+  nodes per target, resolve constant-score connection types (5'rev->5'fwd and
+  distant intergenic connections) with sliding-window maxima, and score the
+  remaining candidates on a compact node view; results are unchanged.
+- Sped up node creation (byte-level codon classification tables), node
+  sorting, Shine-Dalgarno scoring (per-6-mer lookup table), coding-score,
+  ORF GC, GC-frame, background k-mer and start-training passes.
+- Metagenomic mode now computes the ORF GC content once per node set instead
+  of once per preset.
+- Single-genome prediction of *E. coli* K-12 runs about 6.5x faster
+  single-threaded and metagenomic mode about 8.5x faster, with byte-identical
+  output in every format.
+
 ## [0.3.0] - 2026-07-26
 
 ### Added

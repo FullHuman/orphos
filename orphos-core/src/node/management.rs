@@ -9,12 +9,38 @@ pub fn calc_orf_gc(encoded_sequence: &[u8], sequence_length: usize, nodes: &mut 
         return;
     }
 
-    process_strand(encoded_sequence, sequence_length, nodes, Strand::Forward);
-    process_strand(encoded_sequence, sequence_length, nodes, Strand::Reverse);
+    let gc_prefix = gc_prefix_counts(encoded_sequence, sequence_length);
+    process_strand(
+        encoded_sequence,
+        &gc_prefix,
+        sequence_length,
+        nodes,
+        Strand::Forward,
+    );
+    process_strand(
+        encoded_sequence,
+        &gc_prefix,
+        sequence_length,
+        nodes,
+        Strand::Reverse,
+    );
+}
+
+/// `counts[p]` is the number of G/C bases before position `p`.
+fn gc_prefix_counts(encoded_sequence: &[u8], sequence_length: usize) -> Vec<u32> {
+    let mut counts = Vec::with_capacity(sequence_length + 1);
+    let mut total = 0u32;
+    counts.push(total);
+    for position in 0..sequence_length {
+        total += u32::from(is_gc(encoded_sequence, position));
+        counts.push(total);
+    }
+    counts
 }
 
 fn process_strand(
     encoded_sequence: &[u8],
+    gc_prefix: &[u32],
     sequence_length: usize,
     nodes: &mut [Node],
     strand: Strand,
@@ -44,7 +70,7 @@ fn process_strand(
                     );
                 } else {
                     update_start_codon_gc(
-                        encoded_sequence,
+                        gc_prefix,
                         sequence_length,
                         node,
                         &mut gc,
@@ -75,7 +101,7 @@ fn process_strand(
                     );
                 } else {
                     update_start_codon_gc(
-                        encoded_sequence,
+                        gc_prefix,
                         sequence_length,
                         node,
                         &mut gc,
@@ -104,7 +130,7 @@ fn update_stop_codon_gc(
 }
 
 fn update_start_codon_gc(
-    seq: &[u8],
+    gc_prefix: &[u32],
     sequence_length: usize,
     node: &mut Node,
     gc: &mut [f64; 3],
@@ -115,13 +141,12 @@ fn update_start_codon_gc(
     match strand {
         Strand::Forward => {
             if last[frame] >= 3 {
-                gc[frame] +=
-                    accumulate_gc_forward(seq, sequence_length, node.position.index, last[frame]);
+                gc[frame] += accumulate_gc_forward(gc_prefix, node.position.index, last[frame]);
             }
         }
         Strand::Reverse => {
             gc[frame] +=
-                accumulate_gc_reverse(seq, sequence_length, node.position.index, last[frame]);
+                accumulate_gc_reverse(gc_prefix, sequence_length, node.position.index, last[frame]);
         }
         Strand::Unknown => todo!(),
     }
@@ -193,34 +218,24 @@ fn calculate_codon_gc(
         .sum()
 }
 
-fn accumulate_gc_forward(
-    encoded_sequence: &[u8],
-    sequence_length: usize,
-    current_index: usize,
-    last_index: usize,
-) -> f64 {
+/// G/C count of the codons `last_index - 3, last_index - 6, ...` down to
+/// `current_index`, i.e. of the bases in `[last_index - 3k, last_index)` for
+/// the `k` whole codons that fit. Counts are integers, so summing them in
+/// one step gives the same value as adding the codons one by one.
+fn accumulate_gc_forward(gc_prefix: &[u32], current_index: usize, last_index: usize) -> f64 {
     if last_index < 3 || last_index <= current_index {
         return 0.0;
     }
 
-    let mut gc_count = 0.0;
-    let end = last_index.saturating_sub(3);
-
-    // Process in steps of 3, going backwards
-    let mut j = end;
-    while j >= current_index {
-        gc_count += calculate_triplet_gc(encoded_sequence, sequence_length, j);
-        if j < 3 {
-            break;
-        }
-        j = j.saturating_sub(3);
-    }
-
-    gc_count
+    let codons = (last_index - current_index) / 3;
+    f64::from(gc_prefix[last_index] - gc_prefix[last_index - 3 * codons])
 }
 
+/// G/C count of the codons `last_index + 3, last_index + 6, ...` up to
+/// `current_index` (and within the sequence), i.e. of the bases in
+/// `[last_index + 3, last_index + 3 + 3k)` for the `k` codons that fit.
 fn accumulate_gc_reverse(
-    encoded_sequence: &[u8],
+    gc_prefix: &[u32],
     sequence_length: usize,
     current_index: usize,
     last_index: usize,
@@ -229,51 +244,13 @@ fn accumulate_gc_reverse(
         return 0.0;
     }
 
-    let mut gc_count = 0.0;
     let start = last_index + 3;
     let end = current_index.min(sequence_length.saturating_sub(3));
-
-    // Process in steps of 3, going forwards
-    let mut j = start;
-    while j <= end && j < sequence_length {
-        gc_count += calculate_triplet_gc(encoded_sequence, sequence_length, j);
-        j += 3;
-    }
-
-    gc_count
-}
-
-fn calculate_triplet_gc(encoded_sequence: &[u8], sequence_length: usize, start_pos: usize) -> f64 {
-    // Early bounds check to avoid unnecessary computation
-    if start_pos >= sequence_length {
+    if end < start {
         return 0.0;
     }
-
-    let end_pos = (start_pos + 3).min(sequence_length);
-    let mut gc_count = 0.0;
-
-    // Unrolled loop for better performance when we have all 3 positions
-    if start_pos + 2 < sequence_length {
-        // Fast path: all 3 positions are valid
-        if is_gc(encoded_sequence, start_pos) {
-            gc_count += 1.0;
-        }
-        if is_gc(encoded_sequence, start_pos + 1) {
-            gc_count += 1.0;
-        }
-        if is_gc(encoded_sequence, start_pos + 2) {
-            gc_count += 1.0;
-        }
-    } else {
-        // Slow path: handle boundary cases
-        for pos in start_pos..end_pos {
-            if is_gc(encoded_sequence, pos) {
-                gc_count += 1.0;
-            }
-        }
-    }
-
-    gc_count
+    let codons = (end - start) / 3 + 1;
+    f64::from(gc_prefix[start + 3 * codons] - gc_prefix[start])
 }
 
 const fn calculate_orf_length(stop_value: isize, index: usize) -> f64 {
@@ -410,6 +387,117 @@ mod tests {
         assert_eq!(gc_content, 0.0);
     }
 
+    /// Codon-by-codon G/C counting, as previously implemented, used as the
+    /// reference for the prefix-sum accumulators.
+    fn calculate_triplet_gc(
+        encoded_sequence: &[u8],
+        sequence_length: usize,
+        start_pos: usize,
+    ) -> f64 {
+        // Early bounds check to avoid unnecessary computation
+        if start_pos >= sequence_length {
+            return 0.0;
+        }
+
+        let end_pos = (start_pos + 3).min(sequence_length);
+        let mut gc_count = 0.0;
+
+        // Unrolled loop for better performance when we have all 3 positions
+        if start_pos + 2 < sequence_length {
+            // Fast path: all 3 positions are valid
+            if is_gc(encoded_sequence, start_pos) {
+                gc_count += 1.0;
+            }
+            if is_gc(encoded_sequence, start_pos + 1) {
+                gc_count += 1.0;
+            }
+            if is_gc(encoded_sequence, start_pos + 2) {
+                gc_count += 1.0;
+            }
+        } else {
+            // Slow path: handle boundary cases
+            for pos in start_pos..end_pos {
+                if is_gc(encoded_sequence, pos) {
+                    gc_count += 1.0;
+                }
+            }
+        }
+
+        gc_count
+    }
+
+    fn accumulate_gc_forward_reference(
+        encoded_sequence: &[u8],
+        sequence_length: usize,
+        current_index: usize,
+        last_index: usize,
+    ) -> f64 {
+        if last_index < 3 || last_index <= current_index {
+            return 0.0;
+        }
+        let mut gc_count = 0.0;
+        let mut j = last_index.saturating_sub(3);
+        while j >= current_index {
+            gc_count += calculate_triplet_gc(encoded_sequence, sequence_length, j);
+            if j < 3 {
+                break;
+            }
+            j = j.saturating_sub(3);
+        }
+        gc_count
+    }
+
+    fn accumulate_gc_reverse_reference(
+        encoded_sequence: &[u8],
+        sequence_length: usize,
+        current_index: usize,
+        last_index: usize,
+    ) -> f64 {
+        if last_index + 3 > current_index {
+            return 0.0;
+        }
+        let mut gc_count = 0.0;
+        let end = current_index.min(sequence_length.saturating_sub(3));
+        let mut j = last_index + 3;
+        while j <= end && j < sequence_length {
+            gc_count += calculate_triplet_gc(encoded_sequence, sequence_length, j);
+            j += 3;
+        }
+        gc_count
+    }
+
+    #[test]
+    fn test_accumulators_match_reference() {
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for length in [1usize, 2, 3, 4, 7, 8, 9, 10, 30, 31, 32, 64, 65, 200] {
+            let bases: Vec<u8> = (0..length)
+                .map(|_| b"ACGT"[(next() % 4) as usize])
+                .collect();
+            let encoded = get_encoded_sequence(&bases);
+            let prefix = gc_prefix_counts(&encoded, length);
+            for current in 0..=length {
+                for last in 0..=length {
+                    assert_eq!(
+                        accumulate_gc_forward(&prefix, current, last),
+                        accumulate_gc_forward_reference(&encoded, length, current, last),
+                        "forward length {length} current {current} last {last}"
+                    );
+                    assert_eq!(
+                        accumulate_gc_reverse(&prefix, length, current, last),
+                        accumulate_gc_reverse_reference(&encoded, length, current, last),
+                        "reverse length {length} current {current} last {last}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_calculate_triplet_gc() {
         let sequence = b"GCA"; // 2 GC out of 3
@@ -441,8 +529,9 @@ mod tests {
         let sequence = b"GGGAAAGGG"; // GC at start and end
         let encoded_seq = get_encoded_sequence(sequence);
 
-        let gc_count = accumulate_gc_forward(&encoded_seq, sequence.len(), 3, 9);
-        assert!(gc_count >= 0.0);
+        let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        let gc_count = accumulate_gc_forward(&prefix, 3, 9);
+        assert_eq!(gc_count, 3.0);
     }
 
     #[test]
@@ -450,8 +539,9 @@ mod tests {
         let sequence = b"GGGAAAGGG"; // GC at start and end
         let encoded_seq = get_encoded_sequence(sequence);
 
-        let gc_count = accumulate_gc_reverse(&encoded_seq, sequence.len(), 6, 0);
-        assert!(gc_count >= 0.0);
+        let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        let gc_count = accumulate_gc_reverse(&prefix, sequence.len(), 6, 0);
+        assert_eq!(gc_count, 3.0);
     }
 
     #[test]
@@ -463,7 +553,14 @@ mod tests {
             create_test_node(9, Strand::Forward, CodonType::Stop, 0),
         ];
 
-        process_strand(&encoded_seq, sequence.len(), &mut nodes, Strand::Forward);
+        let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        process_strand(
+            &encoded_seq,
+            &prefix,
+            sequence.len(),
+            &mut nodes,
+            Strand::Forward,
+        );
 
         // Should process forward strand nodes
         assert!(nodes[0].scores.gc_content >= 0.0);
@@ -478,7 +575,14 @@ mod tests {
             create_test_node(0, Strand::Reverse, CodonType::Atg, 9),
         ];
 
-        process_strand(&encoded_seq, sequence.len(), &mut nodes, Strand::Reverse);
+        let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        process_strand(
+            &encoded_seq,
+            &prefix,
+            sequence.len(),
+            &mut nodes,
+            Strand::Reverse,
+        );
 
         // Should process reverse strand nodes
         assert!(nodes[1].scores.gc_content >= 0.0);
@@ -514,8 +618,9 @@ mod tests {
         let mut gc = [3.0; 3]; // Some initial GC count
         let mut last = [9; 3];
 
+        let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
         update_start_codon_gc(
-            &encoded_seq,
+            &prefix,
             sequence.len(),
             &mut node,
             &mut gc,

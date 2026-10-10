@@ -10,8 +10,9 @@ use crate::constants::MIN_SEQUENCE_LENGTH;
 use crate::metagenomic::bins;
 use crate::metagenomic::get_preset_training_ref;
 use crate::node::{
-    add_nodes, calculate_dicodon_gene, raw_coding_score, rbs_score, record_gc_bias,
-    record_overlapping_starts, reset_node_scores, score_nodes, sort_nodes_by_position,
+    add_nodes, calc_orf_gc, calculate_dicodon_gene, raw_coding_score, rbs_score, record_gc_bias,
+    record_overlapping_starts, reset_node_scores, score_nodes, score_nodes_with_orf_gc,
+    sort_nodes_by_position,
 };
 use crate::results::{OrphosResults, SequenceInfo};
 use crate::sequence::calc_most_gc_frame;
@@ -516,12 +517,20 @@ impl TrainedOrphos {
                     preset_training,
                 )?;
                 sort_nodes_by_position(&mut nodes);
+                // The ORF GC content depends only on the nodes and the
+                // sequence, so compute it once per node set rather than
+                // once per preset.
+                calc_orf_gc(
+                    &encoded_sequence.forward_sequence,
+                    encoded_sequence.sequence_length,
+                    &mut nodes,
+                );
             }
             if preset_training.gc_content < low || preset_training.gc_content > high {
                 continue;
             }
             reset_node_scores(&mut nodes);
-            score_nodes(
+            score_nodes_with_orf_gc(
                 encoded_sequence,
                 &mut nodes,
                 preset_training,

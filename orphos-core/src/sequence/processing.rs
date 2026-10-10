@@ -5,79 +5,53 @@ use crate::constants::{
 };
 
 /// Calculate most GC-rich frame for each position
+///
+/// For every position `p` this counts the G/C bases in the same reading
+/// frame within half a sliding window on either side (`|q - p| <= 57` for the
+/// 120 bp window), and assigns each triplet the frame with the highest count.
 pub fn calc_most_gc_frame(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
     if sequence_length < READING_FRAMES {
         return vec![-1; sequence_length];
     }
 
-    let forward_gc_counts = calculate_forward_gc_counts(sequence, sequence_length);
-    let backward_gc_counts = calculate_backward_gc_counts(sequence, sequence_length);
-    let total_gc_counts = calculate_total_gc_counts(
-        &forward_gc_counts,
-        &backward_gc_counts,
-        sequence,
-        sequence_length,
-    );
+    let total_gc_counts = calculate_window_gc_counts(sequence, sequence_length);
 
     assign_gc_rich_frames(&total_gc_counts, sequence_length)
 }
 
-fn calculate_forward_gc_counts(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
-    let mut counts = vec![0; sequence_length];
+/// Per position, the number of G/C bases in the same frame at most
+/// `SLIDING_WINDOW_SIZE / 2 - READING_FRAMES` bases away.
+fn calculate_window_gc_counts(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
+    let half_window = SLIDING_WINDOW_SIZE / 2;
+    let reach = half_window - READING_FRAMES;
+    let is_gc_at: Vec<i32> = (0..sequence_length)
+        .map(|position| i32::from(is_gc(sequence, position)))
+        .collect();
 
-    for reading_frame in 0..READING_FRAMES {
-        for position in (reading_frame..sequence_length).step_by(READING_FRAMES) {
-            counts[position] = if position < READING_FRAMES {
-                i32::from(is_gc(sequence, position))
-            } else {
-                counts[position - READING_FRAMES] + i32::from(is_gc(sequence, position))
-            };
+    let mut counts = vec![0; sequence_length];
+    for position in 0..sequence_length {
+        let mut count = if position < READING_FRAMES {
+            // Start of the frame: count the bases at or after `position`.
+            (position..=(position + reach).min(sequence_length - 1))
+                .step_by(READING_FRAMES)
+                .map(|q| is_gc_at[q])
+                .sum()
+        } else {
+            counts[position - READING_FRAMES]
+        };
+        if position >= READING_FRAMES {
+            // Slide the window by one codon within the frame.
+            if position + reach < sequence_length {
+                count += is_gc_at[position + reach];
+            }
+            if position >= half_window {
+                count -= is_gc_at[position - half_window];
+            }
         }
+        counts[position] = count;
     }
 
     counts
-}
-
-fn calculate_backward_gc_counts(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
-    let mut counts = vec![0; sequence_length];
-
-    for reading_frame in 0..READING_FRAMES {
-        for position in (reading_frame..sequence_length).step_by(READING_FRAMES) {
-            let reverse_position = sequence_length - position - 1;
-            counts[reverse_position] = if position < READING_FRAMES {
-                i32::from(is_gc(sequence, reverse_position))
-            } else {
-                counts[reverse_position + READING_FRAMES]
-                    + i32::from(is_gc(sequence, reverse_position))
-            };
-        }
-    }
-
-    counts
-}
-
-fn calculate_total_gc_counts(
-    forward_counts: &[i32],
-    backward_counts: &[i32],
-    sequence: &[u8],
-    sequence_length: usize,
-) -> Vec<i32> {
-    (0..sequence_length)
-        .map(|position| {
-            let mut total = forward_counts[position] + backward_counts[position]
-                - i32::from(is_gc(sequence, position));
-
-            if position >= SLIDING_WINDOW_SIZE / 2 {
-                total -= forward_counts[position - SLIDING_WINDOW_SIZE / 2];
-            }
-
-            if position + SLIDING_WINDOW_SIZE / 2 < sequence_length {
-                total -= backward_counts[position + SLIDING_WINDOW_SIZE / 2];
-            }
-
-            total
-        })
-        .collect()
 }
 
 fn assign_gc_rich_frames(total_gc_counts: &[i32], sequence_length: usize) -> Vec<i32> {
@@ -151,54 +125,46 @@ fn find_best_exact_motif(
     start_codon_position: usize,
     ribosome_weights: &[f64],
 ) -> usize {
+    let mut score_prefix = [0.0; MAX_MOTIF_LENGTH + 1];
+    let mut mismatch_prefix = [0_u8; MAX_MOTIF_LENGTH + 1];
+
+    for position in 0..search_limit {
+        let score = base_scores[position];
+        score_prefix[position + 1] = score_prefix[position] + score;
+        mismatch_prefix[position + 1] = mismatch_prefix[position] + u8::from(score < 0.0);
+    }
+
     let mut best_motif_index = 0;
+    let start_distance = start_codon_position - search_position;
 
     for motif_length in (MIN_MOTIF_LENGTH..=search_limit).rev() {
         for motif_start_offset in 0..=(search_limit - motif_length) {
-            if let Some(motif_index) = evaluate_exact_motif(
-                base_scores,
-                motif_start_offset,
-                motif_length,
-                search_position,
-                start_codon_position,
-            ) && is_better_motif(motif_index, best_motif_index, ribosome_weights)
+            let end = motif_start_offset + motif_length;
+
+            if mismatch_prefix[end] != mismatch_prefix[motif_start_offset] {
+                continue;
+            }
+
+            let cumulative_score = score_prefix[end] - score_prefix[motif_start_offset] - 2.0;
+            let ribosome_distance = start_distance - end;
+
+            if ribosome_distance > MAX_RIBOSOME_DISTANCE || cumulative_score < MIN_CUMULATIVE_SCORE
             {
+                continue;
+            }
+
+            let motif_index = map_score_to_motif_index(
+                cumulative_score as i32,
+                categorize_distance(ribosome_distance, motif_length),
+            );
+
+            if is_better_motif(motif_index, best_motif_index, ribosome_weights) {
                 best_motif_index = motif_index;
             }
         }
     }
 
     best_motif_index
-}
-
-fn evaluate_exact_motif(
-    base_scores: &[f64],
-    motif_start_offset: usize,
-    motif_length: usize,
-    search_position: usize,
-    start_codon_position: usize,
-) -> Option<usize> {
-    let start = motif_start_offset;
-    let end = motif_start_offset + motif_length;
-    let window = &base_scores[start..end];
-
-    if window.iter().any(|&score| score < 0.0) {
-        return None;
-    }
-
-    let cumulative_score: f64 = window.iter().copied().sum::<f64>() - 2.0;
-    let ribosome_distance =
-        start_codon_position - (search_position + motif_start_offset + motif_length);
-
-    if ribosome_distance > MAX_RIBOSOME_DISTANCE || cumulative_score < MIN_CUMULATIVE_SCORE {
-        return None;
-    }
-
-    let distance_category = categorize_distance(ribosome_distance, motif_length);
-    Some(map_score_to_motif_index(
-        cumulative_score as i32,
-        distance_category,
-    ))
 }
 
 /// Find Shine-Dalgarno motifs with single mismatch
@@ -253,64 +219,54 @@ fn find_best_mismatch_motif(
     start_codon_position: usize,
     ribosome_weights: &[f64],
 ) -> usize {
+    let mut score_prefix = [0.0; MAX_MOTIF_LENGTH + 1];
+    let mut mismatch_prefix = [0_u8; MAX_MOTIF_LENGTH + 1];
+
+    for position in 0..search_limit {
+        let score = base_scores[position];
+        score_prefix[position + 1] = score_prefix[position] + score;
+        mismatch_prefix[position + 1] = mismatch_prefix[position] + u8::from(score < 0.0);
+    }
+
     let mut best_motif_index = 0;
+    let start_distance = start_codon_position - search_position;
 
     for motif_length in (5..=search_limit).rev() {
         for motif_start_offset in 0..=(search_limit - motif_length) {
-            if let Some(motif_index) = evaluate_mismatch_motif(
-                base_scores,
-                motif_start_offset,
-                motif_length,
-                search_position,
-                start_codon_position,
-            ) && is_better_motif(motif_index, best_motif_index, ribosome_weights)
+            let end = motif_start_offset + motif_length;
+
+            if mismatch_prefix[end] - mismatch_prefix[motif_start_offset] != 1 {
+                continue;
+            }
+
+            let mut cumulative_score = score_prefix[end] - score_prefix[motif_start_offset] - 2.0;
+
+            if base_scores[motif_start_offset] < 0.0
+                || base_scores[motif_start_offset + 1] < 0.0
+                || base_scores[end - 2] < 0.0
+                || base_scores[end - 1] < 0.0
             {
+                cumulative_score -= 10.0;
+            }
+
+            let ribosome_distance = start_distance - end;
+            if ribosome_distance > MAX_RIBOSOME_DISTANCE || cumulative_score < MIN_CUMULATIVE_SCORE
+            {
+                continue;
+            }
+
+            let motif_index = map_mismatch_score_to_motif_index(
+                cumulative_score as i32,
+                categorize_mismatch_distance(ribosome_distance),
+            );
+
+            if is_better_motif(motif_index, best_motif_index, ribosome_weights) {
                 best_motif_index = motif_index;
             }
         }
     }
 
     best_motif_index
-}
-
-fn evaluate_mismatch_motif(
-    base_scores: &[f64],
-    motif_start_offset: usize,
-    motif_length: usize,
-    search_position: usize,
-    start_codon_position: usize,
-) -> Option<usize> {
-    let mut cumulative_score = -2.0;
-    let mut mismatch_count = 0;
-
-    let start = motif_start_offset;
-    let end = motif_start_offset + motif_length;
-    for (pos_in_motif, &score) in base_scores[start..end].iter().enumerate() {
-        cumulative_score += score;
-        if score < 0.0 {
-            mismatch_count += 1;
-            if pos_in_motif <= 1 || pos_in_motif >= motif_length - 2 {
-                cumulative_score -= 10.0;
-            }
-        }
-    }
-
-    if mismatch_count != 1 {
-        return None;
-    }
-
-    let ribosome_distance =
-        start_codon_position - (search_position + motif_start_offset + motif_length);
-
-    if ribosome_distance > MAX_RIBOSOME_DISTANCE || cumulative_score < MIN_CUMULATIVE_SCORE {
-        return None;
-    }
-
-    let distance_category = categorize_mismatch_distance(ribosome_distance);
-    Some(map_mismatch_score_to_motif_index(
-        cumulative_score as i32,
-        distance_category,
-    ))
 }
 
 const fn categorize_distance(ribosome_distance: usize, motif_length: usize) -> usize {
@@ -394,6 +350,72 @@ fn is_better_motif(current_index: usize, best_index: usize, ribosome_weights: &[
 mod tests {
     use super::*;
     use crate::sequence::encoded::EncodedSequence;
+
+    /// Reference implementation of the GC frame plot with explicit forward,
+    /// backward and windowed counts, as previously implemented.
+    fn calc_most_gc_frame_reference(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
+        if sequence_length < READING_FRAMES {
+            return vec![-1; sequence_length];
+        }
+        let mut forward = vec![0; sequence_length];
+        let mut backward = vec![0; sequence_length];
+        for frame in 0..READING_FRAMES {
+            for position in (frame..sequence_length).step_by(READING_FRAMES) {
+                forward[position] = if position < READING_FRAMES {
+                    i32::from(is_gc(sequence, position))
+                } else {
+                    forward[position - READING_FRAMES] + i32::from(is_gc(sequence, position))
+                };
+                let reverse_position = sequence_length - position - 1;
+                backward[reverse_position] = if position < READING_FRAMES {
+                    i32::from(is_gc(sequence, reverse_position))
+                } else {
+                    backward[reverse_position + READING_FRAMES]
+                        + i32::from(is_gc(sequence, reverse_position))
+                };
+            }
+        }
+        let total: Vec<i32> = (0..sequence_length)
+            .map(|position| {
+                let mut total =
+                    forward[position] + backward[position] - i32::from(is_gc(sequence, position));
+                if position >= SLIDING_WINDOW_SIZE / 2 {
+                    total -= forward[position - SLIDING_WINDOW_SIZE / 2];
+                }
+                if position + SLIDING_WINDOW_SIZE / 2 < sequence_length {
+                    total -= backward[position + SLIDING_WINDOW_SIZE / 2];
+                }
+                total
+            })
+            .collect();
+        assign_gc_rich_frames(&total, sequence_length)
+    }
+
+    #[test]
+    fn test_calc_most_gc_frame_matches_reference() {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for length in [
+            3usize, 4, 5, 59, 60, 61, 119, 120, 121, 122, 123, 500, 1001, 4096,
+        ] {
+            for _ in 0..4 {
+                let bases: Vec<u8> = (0..length)
+                    .map(|_| b"ACGT"[(next() % 4) as usize])
+                    .collect();
+                let encoded = EncodedSequence::without_masking(&bases);
+                assert_eq!(
+                    calc_most_gc_frame(&encoded.forward_sequence, length),
+                    calc_most_gc_frame_reference(&encoded.forward_sequence, length),
+                    "length {length}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_calc_most_gc_frame_basic() {

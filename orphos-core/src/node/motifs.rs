@@ -3,10 +3,10 @@ use rayon::prelude::*;
 
 use crate::{
     constants::{
-        INITIAL_MAX_SCORE, MIN_MOTIF_SCORE, MOTIF_THRESHOLD_OFFSET, RBS_DOWNSTREAM_DISTANCE,
-        RBS_UPSTREAM_DISTANCE,
+        INITIAL_MAX_SCORE, MAX_MOTIF_LENGTH, MIN_MOTIF_SCORE, MOTIF_THRESHOLD_OFFSET,
+        RBS_DOWNSTREAM_DISTANCE, RBS_UPSTREAM_DISTANCE,
     },
-    sequence::{calculate_kmer_index, shine_dalgarno_exact, shine_dalgarno_mm},
+    sequence::{calculate_kmer_index, encoded_base_code, shine_dalgarno_exact, shine_dalgarno_mm},
     types::{CodonType, Motif, Node, Training},
 };
 
@@ -21,6 +21,102 @@ fn calculate_rbs_scores(
         shine_dalgarno_exact(seq, pos, target_pos, rbs_weights),
         shine_dalgarno_mm(seq, pos, target_pos, rbs_weights),
     ]
+}
+
+/// Number of bases a Shine-Dalgarno search can read from its search position.
+const RBS_KMER_LENGTH: usize = MAX_MOTIF_LENGTH;
+
+/// Longest upstream motif, and the k-mer length read per motif window.
+const MOTIF_KMER_LENGTH: usize = MAX_MOTIF_LENGTH;
+/// Farthest motif window start upstream of the start codon (`start - 18 - 3`).
+const MOTIF_WINDOW_UPSTREAM: isize = 21;
+/// Nearest motif window start upstream of the start codon (`start - 6`).
+const MOTIF_WINDOW_DOWNSTREAM: isize = 6;
+/// Number of distinct motif window starts.
+const MOTIF_WINDOW_COUNT: usize = (MOTIF_WINDOW_UPSTREAM - MOTIF_WINDOW_DOWNSTREAM + 1) as usize;
+
+/// Highest ribosome-binding-site motif indices for every 6-mer and spacer
+/// distance, tabulated with [`shine_dalgarno_exact`] / [`shine_dalgarno_mm`].
+///
+/// Both searches only read the bases between the search position and the
+/// start codon (at most six) and otherwise depend on the distance to the
+/// start codon and the motif weights, so each (6-mer, distance) pair has a
+/// fixed answer for a given weight set.
+struct RbsLookup {
+    /// `[6-mer index][distance]` -> `[exact motif index, mismatch motif index]`
+    table: Vec<[u8; 2]>,
+}
+
+impl RbsLookup {
+    const MAX_DISTANCE: usize = RBS_UPSTREAM_DISTANCE + 1;
+    const KMER_COUNT: usize = 1 << (2 * RBS_KMER_LENGTH);
+
+    fn new(rbs_weights: &[f64]) -> Self {
+        let mut table = vec![[0u8; 2]; Self::KMER_COUNT * (Self::MAX_DISTANCE + 1)];
+        for kmer in 0..Self::KMER_COUNT {
+            // Pack the 6-mer the way the encoded sequence stores it so the
+            // original searches can run on it directly.
+            let mut packed = [0u8; 2];
+            for offset in 0..RBS_KMER_LENGTH {
+                let base = ((kmer >> (2 * offset)) & 0b11) as u8;
+                packed[offset / 4] |= base << (2 * (offset % 4));
+            }
+            for distance in 0..=Self::MAX_DISTANCE {
+                let [exact, mismatch] = calculate_rbs_scores(&packed, 0, distance, rbs_weights);
+                table[kmer * (Self::MAX_DISTANCE + 1) + distance] = [exact as u8, mismatch as u8];
+            }
+        }
+        Self { table }
+    }
+
+    #[inline]
+    fn lookup(&self, kmer: usize, distance: usize) -> [usize; 2] {
+        let [exact, mismatch] = self.table[kmer * (Self::MAX_DISTANCE + 1) + distance];
+        [usize::from(exact), usize::from(mismatch)]
+    }
+
+    /// Scores every search position in `search_start..=search_end` against the
+    /// start codon at `start_codon_position` and keeps the best motif indices.
+    #[inline]
+    fn score_window(
+        &self,
+        seq: &[u8],
+        search_start: usize,
+        search_end: usize,
+        start_codon_position: usize,
+        best: &mut [usize; 2],
+    ) {
+        // Positions closer than RBS_KMER_LENGTH to the start codon never score
+        // (the searches require at least MIN_DISTANCE_FROM_START + MIN_MOTIF_LENGTH
+        // bases), and skipping them keeps every 6-mer read inside the sequence.
+        let Some(last) = start_codon_position
+            .checked_sub(RBS_KMER_LENGTH)
+            .map(|last| last.min(search_end))
+        else {
+            return;
+        };
+        if search_start > last {
+            return;
+        }
+
+        let mut kmer = calculate_kmer_index(RBS_KMER_LENGTH, seq, search_start);
+        for position in search_start..=last {
+            let distance = start_codon_position - position;
+            if distance <= Self::MAX_DISTANCE {
+                let scores = self.lookup(kmer, distance);
+                if scores[0] > best[0] {
+                    best[0] = scores[0];
+                }
+                if scores[1] > best[1] {
+                    best[1] = scores[1];
+                }
+            }
+            if position < last {
+                let next_base = usize::from(encoded_base_code(seq, position + RBS_KMER_LENGTH));
+                kmer = (kmer >> 2) | (next_base << (2 * (RBS_KMER_LENGTH - 1)));
+            }
+        }
+    }
 }
 
 /// RBS Scoring Function: Calculate the RBS motif and then multiply it by the
@@ -42,77 +138,51 @@ pub fn rbs_score(
     nodes: &mut [Node],
     training: &Training,
 ) {
+    let lookup = RbsLookup::new(&*training.rbs_weights);
+
     // Parallelize RBS scoring across all start nodes
     nodes
         .par_iter_mut()
-        .enumerate()
-        .filter(|(_, node)| node.position.codon_type != CodonType::Stop && !node.position.is_edge)
-        .for_each(|(_, node)| {
-            node.motif_info.ribosome_binding_sites[0] = 0;
-            node.motif_info.ribosome_binding_sites[1] = 0;
+        .filter(|node| node.position.codon_type != CodonType::Stop && !node.position.is_edge)
+        .for_each(|node| {
+            let mut best = [0usize; 2];
 
             match node.position.strand {
                 Strand::Forward => {
                     let search_start = node.position.index.saturating_sub(RBS_UPSTREAM_DISTANCE);
                     let search_end = node.position.index.saturating_sub(RBS_DOWNSTREAM_DISTANCE);
-
-                    for j in search_start..=search_end {
-                        let cur_sc = calculate_rbs_scores(
-                            seq,
-                            j,
-                            node.position.index,
-                            &*training.rbs_weights,
-                        );
-
-                        if cur_sc[0] > node.motif_info.ribosome_binding_sites[0] {
-                            node.motif_info.ribosome_binding_sites[0] = cur_sc[0];
-                        }
-                        if cur_sc[1] > node.motif_info.ribosome_binding_sites[1] {
-                            node.motif_info.ribosome_binding_sites[1] = cur_sc[1];
-                        }
-                    }
+                    lookup.score_window(
+                        seq,
+                        search_start,
+                        search_end,
+                        node.position.index,
+                        &mut best,
+                    );
                 }
                 Strand::Reverse => {
-                    let upstream_offset = RBS_UPSTREAM_DISTANCE + 1;
-                    let downstream_offset = RBS_DOWNSTREAM_DISTANCE + 1;
                     if node.position.index >= sequence_length {
+                        node.motif_info.ribosome_binding_sites = best;
                         return; // Skip invalid node positions
                     }
-                    let start_pos = if sequence_length >= node.position.index + upstream_offset {
-                        sequence_length - node.position.index - upstream_offset
-                    } else {
-                        0 // If calculation would underflow, start from beginning
-                    };
-
-                    let end_pos = if sequence_length >= node.position.index + downstream_offset {
-                        sequence_length - node.position.index - downstream_offset
-                    } else {
-                        0 // If calculation would underflow, set to 0
-                    };
+                    let upstream_offset = RBS_UPSTREAM_DISTANCE + 1;
+                    let downstream_offset = RBS_DOWNSTREAM_DISTANCE + 1;
+                    let start_pos =
+                        (sequence_length - node.position.index).saturating_sub(upstream_offset);
+                    let end_pos =
+                        (sequence_length - node.position.index).saturating_sub(downstream_offset);
                     let target_pos = sequence_length - 1 - node.position.index;
-
-                    for j in start_pos..=end_pos {
-                        if !(0..sequence_length).contains(&j) {
-                            continue;
-                        }
-
-                        let cur_sc = calculate_rbs_scores(
-                            reverse_complement_encoded_sequence,
-                            j,
-                            target_pos,
-                            &*training.rbs_weights,
-                        );
-
-                        if cur_sc[0] > node.motif_info.ribosome_binding_sites[0] {
-                            node.motif_info.ribosome_binding_sites[0] = cur_sc[0];
-                        }
-                        if cur_sc[1] > node.motif_info.ribosome_binding_sites[1] {
-                            node.motif_info.ribosome_binding_sites[1] = cur_sc[1];
-                        }
-                    }
+                    lookup.score_window(
+                        reverse_complement_encoded_sequence,
+                        start_pos,
+                        end_pos,
+                        target_pos,
+                        &mut best,
+                    );
                 }
                 Strand::Unknown => unreachable!(),
             }
+
+            node.motif_info.ribosome_binding_sites = best;
         });
 }
 
@@ -160,9 +230,38 @@ pub fn find_best_upstream_motif(
     let mut max_ndx = 0;
     let mut max_len = 0;
 
+    // Every motif window starts in [start - 21, start - 6]. Read one 6-mer per
+    // window start (bases past the sequence end read as zero) and derive the
+    // shorter motifs by masking; a motif's bases are the low bits of the
+    // 6-mer at the same position.
+    let first_window = (start as isize - MOTIF_WINDOW_UPSTREAM).max(0);
+    let last_window = start as isize - MOTIF_WINDOW_DOWNSTREAM;
+    let mut window_kmers = [0usize; MOTIF_WINDOW_COUNT];
+    if last_window >= first_window {
+        let base_at = |position: usize| {
+            if position < sequence_length {
+                usize::from(encoded_base_code(wseq, position))
+            } else {
+                0
+            }
+        };
+        let first_window = first_window as usize;
+        let mut kmer = 0;
+        for offset in 0..MOTIF_KMER_LENGTH {
+            kmer |= base_at(first_window + offset) << (2 * offset);
+        }
+        window_kmers[0] = kmer;
+        for (slot, position) in ((first_window + 1)..=(last_window as usize)).enumerate() {
+            kmer = (kmer >> 2)
+                | (base_at(position + MOTIF_KMER_LENGTH - 1) << (2 * (MOTIF_KMER_LENGTH - 1)));
+            window_kmers[slot + 1] = kmer;
+        }
+    }
+
     // Search through motif lengths 3-6 (i goes from 3 down to 0, representing lengths 6 down to 3)
     for i in (0..=3).rev() {
         let motif_len = i + 3;
+        let motif_mask = (1usize << (2 * motif_len as usize)) - 1;
 
         // Search positions from start-18-i to start-6-i
         let search_start: isize = start as isize - 18 - i;
@@ -188,7 +287,7 @@ pub fn find_best_upstream_motif(
                 0
             };
 
-            let index = calculate_kmer_index(motif_len as usize, wseq, j as usize);
+            let index = window_kmers[(j - first_window) as usize] & motif_mask;
             let score = training.motif_weights[i as usize][spacendx][index];
 
             if score > max_sc {
