@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `-g`/`--translation-table` option (and `translation_table` in the
+  library and Python configuration) was parsed but never used; training
+  always ran with table 11. The requested table is now used for training and
+  prediction, matching `prodigal -g`.
+- `-c`, `-r`, `-m` and `-q` are plain flags again, as documented; they no
+  longer require a value.
 - Single-genome predictions are now byte-identical to Prodigal: the GC frame
   bias counted the last one or two bases of a sequence differently, the
   coding-score length factor used `powi` where Prodigal uses `pow`, ORF GC

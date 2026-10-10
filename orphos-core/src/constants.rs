@@ -347,3 +347,7 @@ pub const RBS_DESCRIPTIONS: [(&str, &str); 28] = [
 
 /// Default start weight factor used in training and scoring
 pub const DEFAULT_START_WEIGHT_FACTOR: f64 = 4.35;
+
+/// Translation table used for training when the user does not request one
+/// (NCBI table 11, bacterial/archaeal), as in Prodigal.
+pub const DEFAULT_TRANSLATION_TABLE: i32 = 11;

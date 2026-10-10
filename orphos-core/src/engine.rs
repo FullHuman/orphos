@@ -6,6 +6,7 @@ use crate::algorithms::dynamic_programming::eliminate_bad_genes;
 use crate::algorithms::dynamic_programming::predict_genes;
 use crate::algorithms::gene_finding::GeneBuilder;
 use crate::config::OrphosConfig;
+use crate::constants::DEFAULT_TRANSLATION_TABLE;
 use crate::constants::MIN_SEQUENCE_LENGTH;
 use crate::metagenomic::bins;
 use crate::metagenomic::get_preset_training_ref;
@@ -230,14 +231,19 @@ impl UntrainedOrphos {
                 encoded_sequence.gc_content * 100.0
             );
         }
+        // Prodigal trains with translation table 11 unless the user requested
+        // another one (`-g`); the table decides which codons are starts and
+        // stops throughout training and prediction.
         let mut training = Training {
-            gc_content: 0.0,
+            gc_content: encoded_sequence.gc_content,
+            translation_table: self
+                .config
+                .translation_table
+                .map_or(DEFAULT_TRANSLATION_TABLE, i32::from),
+            uses_shine_dalgarno: false,
+            gc_bias_factors: [0.0; 3],
             ..Default::default()
         };
-        training.uses_shine_dalgarno = false;
-        training.gc_bias_factors = [0.0; 3];
-
-        training.gc_content = encoded_sequence.gc_content;
 
         let mut nodes = Vec::new();
         let num_nodes = add_nodes(
@@ -1285,6 +1291,25 @@ mod tests {
         assert!(results[0].genes.is_empty()); // But no genes found in 4bp sequence
 
         let _ = fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_train_single_genome_uses_requested_translation_table() {
+        let seq = create_training_sequence();
+        let encoded = create_encoded_sequence_for_test(&seq);
+
+        let mut default_orphos = UntrainedOrphos::new();
+        let trained = default_orphos.train_single_genome(&encoded).unwrap();
+        assert_eq!(trained.training().unwrap().translation_table, 11);
+
+        let config = OrphosConfig {
+            translation_table: Some(4),
+            quiet: true,
+            ..Default::default()
+        };
+        let mut orphos = UntrainedOrphos::with_config(config).unwrap();
+        let trained = orphos.train_single_genome(&encoded).unwrap();
+        assert_eq!(trained.training().unwrap().translation_table, 4);
     }
 
     #[test]

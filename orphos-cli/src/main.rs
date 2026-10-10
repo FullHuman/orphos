@@ -54,7 +54,7 @@
 //! orphos-cli -i plasmid.fasta -r -o plasmid.gff
 //! ```
 
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::output::write_results;
 use orphos_core::*;
@@ -103,24 +103,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arg::new("closed")
                 .short('c')
                 .long("closed")
+                .action(ArgAction::SetTrue)
                 .help("Closed ends (no genes off edges)"),
         )
         .arg(
             Arg::new("circular")
                 .short('r')
                 .long("circular")
+                .action(ArgAction::SetTrue)
                 .help("Circular topology (allow wraparound genes)"),
         )
         .arg(
             Arg::new("mask")
                 .short('m')
                 .long("mask")
+                .action(ArgAction::SetTrue)
                 .help("Mask runs of N's"),
         )
         .arg(
             Arg::new("quiet")
                 .short('q')
                 .long("quiet")
+                .action(ArgAction::SetTrue)
                 .help("Quiet mode"),
         )
         .arg(
@@ -142,10 +146,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse options
     let mut options = OrphosConfig {
         metagenomic: matches.get_one::<String>("mode").map(|s| s.as_str()) == Some("meta"),
-        closed_ends: matches.contains_id("closed"),
-        circular: matches.contains_id("circular"),
-        mask_n_runs: matches.contains_id("mask"),
-        quiet: matches.contains_id("quiet"),
+        closed_ends: matches.get_flag("closed"),
+        circular: matches.get_flag("circular"),
+        mask_n_runs: matches.get_flag("mask"),
+        quiet: matches.get_flag("quiet"),
         // training_file: matches.get_one::<String>("training").cloned(),
         ..Default::default()
     };

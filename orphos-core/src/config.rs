@@ -162,7 +162,9 @@ pub struct OrphosConfig {
     /// - `4`: Mycoplasma/Spiroplasma
     /// - Others: See NCBI genetic code tables
     ///
-    /// **Default**: `None` (auto-detect, usually table 11)
+    /// **Default**: `None`, which trains with table 11 as Prodigal does.
+    /// Ignored in metagenomic mode, where each preset model carries its own
+    /// table.
     pub translation_table: Option<u8>,
 
     /// Number of threads to use for parallel processing.
