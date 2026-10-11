@@ -26,7 +26,11 @@ pub fn train_starts_nonsd(
 
     training.start_type_weights = [0.0; NUM_CODON_TYPES];
     *training.upstream_composition = [[0.0; NUM_BASES]; UPSTREAM_POSITIONS];
-    *training.motif_weights = [[[0.0; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
+    for motif_length in training.motif_weights.iter_mut() {
+        for spacer in motif_length.iter_mut() {
+            spacer.fill(0.0);
+        }
+    }
     training.no_motif_weight = 0.0;
 
     let mut total_starts = 0.0;

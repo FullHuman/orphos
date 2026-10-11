@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prediction, matching `prodigal -g`.
 - `-c`, `-r`, `-m` and `-q` are plain flags again, as documented; they no
   longer require a value.
+- The CLI runs its analysis on a thread with a 64 MiB stack, and training no
+  longer builds half-megabyte motif tables on the stack, so non-SD training
+  and metagenomic mode no longer overflow the 1 MiB main-thread stack on
+  Windows.
 - Single-genome predictions are now byte-identical to Prodigal: the GC frame
   bias counted the last one or two bases of a sequence differently, the
   coding-score length factor used `powi` where Prodigal uses `pow`, ORF GC

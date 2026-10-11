@@ -264,7 +264,11 @@ fn build_coverage_map(
     let threshold = UPSTREAM_MOTIF_COVERAGE_THRESHOLD;
 
     // Initialize all as not good
-    *good_motifs = [[[0; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
+    for motif_length in good_motifs.iter_mut() {
+        for spacer in motif_length.iter_mut() {
+            spacer.fill(0);
+        }
+    }
 
     // 3-base motifs: mark as good if above threshold
     for spacer_index in 0..NUM_MOTIF_SIZES {
@@ -386,7 +390,8 @@ fn update_motif_weights(
     let mut _bad_real_sum = 0.0f64;
 
     // We'll accumulate a temporary array for normalized real frequencies of good motifs
-    let mut real_freqs = [[[0.0f64; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
+    // Heap allocated: half a megabyte would not fit on small (Windows) stacks.
+    let mut real_freqs = vec![[[0.0f64; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
 
     for l in 0..NUM_MOTIF_SIZES {
         for s in 0..NUM_MOTIF_SIZES {

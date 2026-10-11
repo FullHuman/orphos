@@ -618,7 +618,10 @@ fn preset_1() -> Training {
         [0.110000, -0.064000, 0.027000, -0.098000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][3][15] = 0.577000;
         m[1][3][15] = 0.890000;
         m[2][3][0] = 0.677000;
@@ -633,7 +636,7 @@ fn preset_1() -> Training {
         m[3][3][0] = 1.502000;
         m[3][3][63] = 1.550000;
         m[3][3][207] = 2.619000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.292000;
     t.gene_dicodon_table = Box::new([
@@ -1192,12 +1195,15 @@ fn preset_2() -> Training {
         [0.091000, 0.080000, -0.425000, 0.023000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][3] = 0.583000;
         m[0][1][3] = 1.228000;
         m[0][2][3] = 0.769000;
         m[0][3][3] = 0.058000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.873000;
     t.gene_dicodon_table = Box::new([
@@ -1757,7 +1763,10 @@ fn preset_3() -> Training {
         [0.210000, -0.154000, -0.204000, 0.173000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][21] = -0.604000;
         m[0][0][29] = -1.367000;
         m[0][0][53] = -0.879000;
@@ -1785,7 +1794,7 @@ fn preset_3() -> Training {
         m[2][3][853] = -1.219000;
         m[3][0][1877] = 2.958000;
         m[3][2][1877] = 2.081000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -3.223000;
     t.gene_dicodon_table = Box::new([
@@ -4011,12 +4020,15 @@ fn preset_7() -> Training {
         [0.251000, 0.026000, -0.272000, -0.089000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[1][0][117] = 1.690000;
         m[1][0][212] = 0.457000;
         m[2][0][468] = 2.753000;
         m[2][1][500] = 0.469000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.355000;
     t.gene_dicodon_table = Box::new([
@@ -4576,7 +4588,10 @@ fn preset_8() -> Training {
         [0.094000, -0.025000, -0.262000, 0.091000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][0] = -0.856000;
         m[0][0][3] = -0.046000;
         m[0][1][0] = -1.186000;
@@ -4614,7 +4629,7 @@ fn preset_8() -> Training {
         m[3][1][3] = 2.092000;
         m[3][2][3] = 3.043000;
         m[3][3][3] = 1.546000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -2.021000;
     t.gene_dicodon_table = Box::new([
@@ -6282,7 +6297,10 @@ fn preset_11() -> Training {
         [0.132000, -0.057000, -0.304000, 0.029000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][3] = 0.126000;
         m[0][1][0] = -0.416000;
         m[0][1][3] = 0.425000;
@@ -6305,7 +6323,7 @@ fn preset_11() -> Training {
         m[3][0][0] = 0.572000;
         m[3][2][0] = 1.889000;
         m[3][3][3] = 1.286000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -1.119000;
     t.gene_dicodon_table = Box::new([
@@ -6862,7 +6880,10 @@ fn preset_12() -> Training {
         [0.125000, 0.104000, -0.102000, -0.157000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][29] = 0.174000;
         m[0][0][53] = -0.090000;
         m[1][0][85] = 0.589000;
@@ -6888,7 +6909,7 @@ fn preset_12() -> Training {
         m[3][2][1877] = 1.041000;
         m[3][2][3541] = 2.053000;
         m[3][3][3541] = 0.954000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.941000;
     t.gene_dicodon_table = Box::new([
@@ -8006,7 +8027,10 @@ fn preset_14() -> Training {
         [-0.076000, 0.005000, 0.153000, -0.167000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[1][0][85] = 0.757000;
         m[2][0][325] = 1.523000;
         m[2][0][341] = 1.678000;
@@ -8017,7 +8041,7 @@ fn preset_14() -> Training {
         m[2][2][341] = 1.088000;
         m[2][3][341] = 0.712000;
         m[3][2][1365] = 2.470000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.224000;
     t.gene_dicodon_table = Box::new([
@@ -8577,13 +8601,16 @@ fn preset_15() -> Training {
         [0.133000, -0.049000, -0.185000, 0.063000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][3][0] = 0.853000;
         m[1][3][0] = 1.026000;
         m[2][3][32] = 2.026000;
         m[2][3][48] = 2.415000;
         m[3][3][0] = 1.419000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.172000;
     t.gene_dicodon_table = Box::new([
@@ -11927,12 +11954,15 @@ fn preset_21() -> Training {
         [0.212000, -0.051000, -0.141000, -0.072000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][12] = 1.000000;
         m[0][1][12] = 1.622000;
         m[0][2][12] = 0.271000;
         m[0][3][12] = 0.267000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.459000;
     t.gene_dicodon_table = Box::new([
@@ -14716,7 +14746,10 @@ fn preset_26() -> Training {
         [0.196000, -0.075000, -0.070000, 0.004000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][21] = 0.095000;
         m[0][0][53] = -0.525000;
         m[0][2][21] = 0.253000;
@@ -14742,7 +14775,7 @@ fn preset_26() -> Training {
         m[2][3][885] = -0.590000;
         m[3][0][3413] = 3.535000;
         m[3][2][3413] = 1.485000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -2.630000;
     t.gene_dicodon_table = Box::new([
@@ -16415,7 +16448,10 @@ fn preset_29() -> Training {
         [0.162000, -0.101000, -0.388000, 0.160000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][0][0] = 0.309000;
         m[0][1][0] = 0.526000;
         m[0][2][0] = 0.718000;
@@ -16431,7 +16467,7 @@ fn preset_29() -> Training {
         m[2][2][48] = 1.246000;
         m[2][3][0] = 0.936000;
         m[2][3][48] = 1.781000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.466000;
     t.gene_dicodon_table = Box::new([
@@ -19762,7 +19798,10 @@ fn preset_35() -> Training {
         [0.172000, -0.013000, -0.174000, -0.005000],
     ]);
     t.motif_weights = {
-        let mut m: crate::types::MotifWeights = [[[-4.0; 4096]; 4]; 4];
+        let mut m: Box<crate::types::MotifWeights> = vec![[[-4.0; 4096]; 4]; 4]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
         m[0][1][63] = 0.666000;
         m[1][0][255] = 0.659000;
         m[1][1][255] = 0.839000;
@@ -19772,7 +19811,7 @@ fn preset_35() -> Training {
         m[2][2][991] = 0.953000;
         m[2][2][1023] = 0.787000;
         m[3][0][4095] = 2.286000;
-        Box::new(m)
+        m
     };
     t.no_motif_weight = -0.126000;
     t.gene_dicodon_table = Box::new([
