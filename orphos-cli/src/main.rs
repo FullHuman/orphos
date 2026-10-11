@@ -54,18 +54,41 @@
 //! orphos-cli -i plasmid.fasta -r -o plasmid.gff
 //! ```
 
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::output::write_results;
 use orphos_core::*;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+/// Stack size for the analysis thread.
+///
+/// Gene finding keeps a few large tables on the stack; the main thread's
+/// default stack (1 MiB on Windows) is too small for them.
+const ANALYSIS_STACK_SIZE: usize = 64 * 1024 * 1024;
+
 /// Main entry point for the Orphos CLI application.
 ///
+/// Runs [`run`] on a thread with a large stack and reports its error.
+fn main() {
+    let worker = std::thread::Builder::new()
+        .name("orphos".to_string())
+        .stack_size(ANALYSIS_STACK_SIZE)
+        .spawn(|| run().map_err(|error| error.to_string()))
+        .expect("failed to spawn the analysis thread");
+    match worker.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => {
+            eprintln!("Error: {message}");
+            std::process::exit(1);
+        }
+        Err(_) => std::process::exit(101),
+    }
+}
+
 /// Parses command-line arguments, configures Orphos, analyzes input sequences,
 /// and writes results in the requested format.
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("orphos")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Prokaryotic gene finding algorithm")
@@ -103,24 +126,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arg::new("closed")
                 .short('c')
                 .long("closed")
+                .action(ArgAction::SetTrue)
                 .help("Closed ends (no genes off edges)"),
         )
         .arg(
             Arg::new("circular")
                 .short('r')
                 .long("circular")
+                .action(ArgAction::SetTrue)
                 .help("Circular topology (allow wraparound genes)"),
         )
         .arg(
             Arg::new("mask")
                 .short('m')
                 .long("mask")
+                .action(ArgAction::SetTrue)
                 .help("Mask runs of N's"),
         )
         .arg(
             Arg::new("quiet")
                 .short('q')
                 .long("quiet")
+                .action(ArgAction::SetTrue)
                 .help("Quiet mode"),
         )
         .arg(
@@ -142,10 +169,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse options
     let mut options = OrphosConfig {
         metagenomic: matches.get_one::<String>("mode").map(|s| s.as_str()) == Some("meta"),
-        closed_ends: matches.contains_id("closed"),
-        circular: matches.contains_id("circular"),
-        mask_n_runs: matches.contains_id("mask"),
-        quiet: matches.contains_id("quiet"),
+        closed_ends: matches.get_flag("closed"),
+        circular: matches.get_flag("circular"),
+        mask_n_runs: matches.get_flag("mask"),
+        quiet: matches.get_flag("quiet"),
         // training_file: matches.get_one::<String>("training").cloned(),
         ..Default::default()
     };
@@ -192,7 +219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         write_results(&mut writer, result, orphos.config.output_format)?;
     }
 
-    if !matches.contains_id("quiet") {
+    if !matches.get_flag("quiet") {
         eprintln!(
             "Analysis complete! Found {} genes in {} sequences.",
             results.iter().map(|r| r.genes.len()).sum::<usize>(),
