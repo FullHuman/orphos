@@ -64,7 +64,7 @@ pip install orphos
 Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-orphos-core = "0.3.0"
+orphos-core = "0.4.0"
 ```
 
 ## 🏃 Quick Start
