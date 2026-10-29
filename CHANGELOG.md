@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second time; nodes are sorted in place instead of being gathered into a
   second array; the node vector is sized from the sequence length; and
   sequences are encoded with the vector encoder when runs of `N` are masked
-  too. Output is unchanged; E. coli K-12 is predicted in about 0.7 s instead
-  of 0.9 s.
+  too. The nodes of the two strands are created on two threads while the
+  GC frame plot is computed on a third, and the three passes of the raw
+  coding score run per strand on two threads. Output is unchanged; E. coli
+  K-12 is predicted in about 0.6 s instead of 0.9 s.
 
 ## [0.4.0] - 2026-10-11
 

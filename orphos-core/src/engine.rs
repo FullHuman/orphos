@@ -257,14 +257,24 @@ impl UntrainedOrphos {
             ..Default::default()
         };
 
+        // The GC frame plot depends on the sequence alone, so it is computed
+        // while the nodes are created and sorted.
         let mut nodes = Vec::new();
-        let num_nodes = add_nodes(
-            encoded_sequence,
-            &mut nodes,
-            self.config.closed_ends,
-            self.config.circular,
-            &training,
-        )?;
+        let (created, gc_frame) = rayon::join(
+            || {
+                let num_nodes = add_nodes(
+                    encoded_sequence,
+                    &mut nodes,
+                    self.config.closed_ends,
+                    self.config.circular,
+                    &training,
+                )?;
+                sort_nodes_by_position(&mut nodes);
+                Ok::<usize, OrphosError>(num_nodes)
+            },
+            || calc_most_gc_frame(&encoded_sequence.forward_sequence, sequence_length),
+        );
+        let num_nodes = created?;
 
         if !self.config.quiet {
             eprintln!(
@@ -272,10 +282,6 @@ impl UntrainedOrphos {
                 num_nodes, self.config.closed_ends
             );
         }
-
-        sort_nodes_by_position(&mut nodes);
-
-        let gc_frame = calc_most_gc_frame(&encoded_sequence.forward_sequence, sequence_length);
 
         record_gc_bias(&gc_frame, &mut nodes, &mut training);
 
