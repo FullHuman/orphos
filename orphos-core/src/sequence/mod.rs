@@ -644,6 +644,29 @@ pub fn encode_sequence(
     Ok(gc_content)
 }
 
+/// The runs of at least `MASK_SIZE` `N`s in `sequence`, as [`encode_sequence`]
+/// records them when masking.
+pub fn find_n_runs(sequence: &[u8]) -> Vec<Mask> {
+    let is_n = |base: u8| base == b'N' || base == b'n';
+    let mut masks = Vec::new();
+    let mut position = 0;
+    while let Some(offset) = sequence[position..].iter().position(|&base| is_n(base)) {
+        let begin = position + offset;
+        let end = sequence[begin..]
+            .iter()
+            .position(|&base| !is_n(base))
+            .map_or(sequence.len(), |length| begin + length);
+        if end - begin >= MASK_SIZE {
+            masks.push(Mask {
+                begin,
+                end: end - 1,
+            });
+        }
+        position = end;
+    }
+    masks
+}
+
 #[inline]
 const fn expand_4_lanes_to_even_bits(bits: u32) -> u8 {
     ((bits & 0x1) | ((bits & 0x2) << 1) | ((bits & 0x4) << 2) | ((bits & 0x8) << 3)) as u8

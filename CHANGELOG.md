@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Gene prediction on a single genome reuses the nodes training created and
+  sorted, with their scores reset, instead of creating and sorting them a
+  second time; nodes are sorted in place instead of being gathered into a
+  second array; the node vector is sized from the sequence length; and
+  sequences are encoded with the vector encoder when runs of `N` are masked
+  too. Output is unchanged; E. coli K-12 is predicted in about 0.7 s instead
+  of 0.9 s.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added

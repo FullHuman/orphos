@@ -218,7 +218,9 @@ pub fn add_nodes(
     let sequence_length = encoded_sequence.sequence_length;
     // Clear the nodes vector
     nodes.clear();
-    nodes.reserve(STT_NOD);
+    // Enough for the start and stop codons of a typical genome (one node
+    // every twenty bases or so), so the vector rarely has to grow and copy.
+    nodes.reserve(STT_NOD.max(sequence_length / 16));
 
     let sequence_length_mod = sequence_length % READING_FRAMES;
 
