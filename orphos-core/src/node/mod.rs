@@ -11,6 +11,7 @@ mod motifs;
 mod overlaps;
 mod record_gc_bias;
 mod scoring;
+pub(crate) mod strands;
 mod utilities;
 mod validation;
 

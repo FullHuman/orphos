@@ -17,8 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too. The nodes of the two strands are created on two threads while the
   GC frame plot is computed on a third, and the three passes of the raw
   coding score, the GC bias record, the ORF GC content and the scans of the
-  Shine-Dalgarno start training run per strand on two threads. Output is unchanged; E. coli
-  K-12 is predicted in about 0.6 s instead of 0.9 s.
+  Shine-Dalgarno start training run per strand on two threads, each strand
+  through its own view of the shared nodes so that nothing is copied or
+  written back. On a pool of one thread the same passes run in place on the
+  calling thread, as fast as before or faster. Output is unchanged; E. coli
+  K-12 is predicted in about 0.6 s instead of 0.9 s on four cores.
 
 ## [0.4.0] - 2026-10-11
 

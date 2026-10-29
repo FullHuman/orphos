@@ -1,5 +1,7 @@
 use bio::bio_types::strand::Strand;
 
+use crate::node::strands::{StrandNodes, has_start_before_stop, split_by_strand};
+use crate::parallel;
 use crate::types::{CodonType, Node, Training};
 
 /// Record GC bias for training
@@ -8,149 +10,130 @@ pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut 
         return;
     }
 
-    // The strands are independent and walk the frame plot in opposite
-    // directions; each is processed on its own thread into its own record
-    // of what its nodes learn, written back to the nodes afterwards.
-    let (forward, reverse) = rayon::join(
-        || {
-            let mut gc_info = vec![GcInfo::default(); nodes.len()];
-            let mut frame_counts = [[0i32; 3]; 3];
-            let mut last_position = [0; 3];
-            process_forward_strand(
-                gc_frame_data,
-                nodes,
-                &mut gc_info,
-                &mut frame_counts,
-                &mut last_position,
-            );
-            gc_info
-        },
-        || {
-            let mut gc_info = vec![GcInfo::default(); nodes.len()];
-            let mut frame_counts = [[0i32; 3]; 3];
-            let mut last_position = [0; 3];
-            process_reverse_strand(
-                gc_frame_data,
-                nodes,
-                &mut gc_info,
-                &mut frame_counts,
-                &mut last_position,
-            );
-            gc_info
-        },
-    );
-    for (node, (forward_info, reverse_info)) in nodes.iter_mut().zip(forward.iter().zip(&reverse)) {
-        let info = match node.position.strand {
-            Strand::Forward => forward_info,
-            Strand::Reverse => reverse_info,
-            Strand::Unknown => continue,
-        };
-        if info.recorded {
-            node.state.gc_bias_frame = info.gc_bias_frame;
-            node.scores.gc_frame_scores = info.gc_frame_scores;
-        }
+    // The strands walk the frame plot in opposite directions, each on its
+    // own thread. Prodigal walks the reverse strand from the counts and
+    // positions the forward strand's walk left behind; only a reverse start
+    // node that no reverse stop of its frame precedes sees them (a gene
+    // wrapping around a circular sequence), and when there is one the
+    // strands are walked one after the other, as before.
+    let (mut forward, mut reverse) = split_by_strand(nodes);
+    let mut frame_counts = [[0i32; 3]; 3];
+    let mut last_position = [0; 3];
+    if has_start_before_stop(&reverse) {
+        process_forward_strand(
+            gc_frame_data,
+            &mut forward,
+            &mut frame_counts,
+            &mut last_position,
+        );
+        process_reverse_strand(
+            gc_frame_data,
+            &mut reverse,
+            &mut frame_counts,
+            &mut last_position,
+        );
+    } else {
+        parallel::join(
+            || {
+                process_forward_strand(
+                    gc_frame_data,
+                    &mut forward,
+                    &mut frame_counts,
+                    &mut last_position,
+                )
+            },
+            || {
+                process_reverse_strand(
+                    gc_frame_data,
+                    &mut reverse,
+                    &mut [[0i32; 3]; 3],
+                    &mut [0; 3],
+                )
+            },
+        );
     }
 
     // Calculate overall bias with better error handling
     calculate_training_bias(nodes, training);
 }
 
-/// What a strand's pass records for one of its start nodes.
-#[derive(Clone, Copy, Default)]
-struct GcInfo {
-    recorded: bool,
-    gc_bias_frame: usize,
-    gc_frame_scores: [f64; 3],
-}
-
 /// Process nodes on the forward strand
 fn process_forward_strand(
     gc_frame_data: &[i32],
-    nodes: &[Node],
-    gc_info: &mut [GcInfo],
+    nodes: &mut StrandNodes,
     frame_counts: &mut [[i32; 3]; 3],
     last_position: &mut [usize; 3],
 ) {
-    nodes
-        .iter()
-        .zip(gc_info.iter_mut())
-        .rev()
-        .filter(|(node, _)| node.position.strand == Strand::Forward)
-        .for_each(|(node, info)| {
-            let frame_index = node.position.index % 3;
-            let frame_offset = 3 - frame_index;
+    nodes.iter_mut().rev().for_each(|node| {
+        let frame_index = node.position.index % 3;
+        let frame_offset = 3 - frame_index;
 
-            if node.position.codon_type == CodonType::Stop {
-                // Reset counters for this frame
-                frame_counts[frame_index]
-                    .iter_mut()
-                    .for_each(|count| *count = 0);
-                last_position[frame_index] = node.position.index;
+        if node.position.codon_type == CodonType::Stop {
+            // Reset counters for this frame
+            frame_counts[frame_index]
+                .iter_mut()
+                .for_each(|count| *count = 0);
+            last_position[frame_index] = node.position.index;
 
-                if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
-                    frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] = 1;
-                }
-            } else {
-                if last_position[frame_index] >= 3 {
-                    let mut position = last_position[frame_index] - 3;
-
-                    while position >= node.position.index {
-                        if let Some(&gc_value) = gc_frame_data.get(position) {
-                            frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] += 1;
-                        }
-
-                        if position < 3 {
-                            break;
-                        }
-                        position -= 3;
-                    }
-                }
-
-                *info = node_gc_info(node, &frame_counts[frame_index]);
-                last_position[frame_index] = node.position.index;
+            if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
+                frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] = 1;
             }
-        });
+        } else {
+            if last_position[frame_index] >= 3 {
+                let mut position = last_position[frame_index] - 3;
+
+                while position >= node.position.index {
+                    if let Some(&gc_value) = gc_frame_data.get(position) {
+                        frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] += 1;
+                    }
+
+                    if position < 3 {
+                        break;
+                    }
+                    position -= 3;
+                }
+            }
+
+            update_node_gc_info(node, &frame_counts[frame_index]);
+            last_position[frame_index] = node.position.index;
+        }
+    });
 }
 
 /// Process nodes on the reverse strand
 fn process_reverse_strand(
     gc_frame_data: &[i32],
-    nodes: &[Node],
-    gc_info: &mut [GcInfo],
+    nodes: &mut StrandNodes,
     frame_counts: &mut [[i32; 3]; 3],
     last_position: &mut [usize; 3],
 ) {
-    nodes
-        .iter()
-        .zip(gc_info.iter_mut())
-        .filter(|(node, _)| node.position.strand == Strand::Reverse)
-        .for_each(|(node, info)| {
-            let frame_index = node.position.index % 3;
+    nodes.iter_mut().for_each(|node| {
+        let frame_index = node.position.index % 3;
 
-            if node.position.codon_type == CodonType::Stop {
-                // Reset counters for this frame
-                frame_counts[frame_index]
-                    .iter_mut()
-                    .for_each(|count| *count = 0);
-                last_position[frame_index] = node.position.index;
+        if node.position.codon_type == CodonType::Stop {
+            // Reset counters for this frame
+            frame_counts[frame_index]
+                .iter_mut()
+                .for_each(|count| *count = 0);
+            last_position[frame_index] = node.position.index;
 
-                if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
-                    frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] = 1;
-                }
-            } else {
-                let mut position = last_position[frame_index] + 3;
-
-                while position <= node.position.index && position < gc_frame_data.len() {
-                    if let Some(&gc_value) = gc_frame_data.get(position) {
-                        frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] += 1;
-                    }
-                    position += 3;
-                }
-
-                *info = node_gc_info(node, &frame_counts[frame_index]);
-                last_position[frame_index] = node.position.index;
+            if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
+                frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] = 1;
             }
-        });
+        } else {
+            let mut position = last_position[frame_index] + 3;
+
+            while position <= node.position.index && position < gc_frame_data.len() {
+                if let Some(&gc_value) = gc_frame_data.get(position) {
+                    frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] += 1;
+                }
+                position += 3;
+            }
+
+            update_node_gc_info(node, &frame_counts[frame_index]);
+            last_position[frame_index] = node.position.index;
+        }
+    });
 }
 
 /// Frame-count bin of a forward-strand position with GC frame value `gc_value`.
@@ -209,15 +192,11 @@ fn calculate_training_bias(nodes: &[Node], training: &mut Training) {
     }
 }
 
-/// GC bias information for a node: the frame with the most GC-rich codons
-/// and, for a gene of positive length, the share of each frame.
-fn node_gc_info(node: &Node, frame_counts: &[i32; 3]) -> GcInfo {
+/// Record the GC bias information of a node: the frame with the most GC-rich
+/// codons and, for a gene of positive length, the share of each frame.
+fn update_node_gc_info(node: &mut Node, frame_counts: &[i32; 3]) {
     let max_frame_index = find_max_frame_index(frame_counts[0], frame_counts[1], frame_counts[2]);
-    let mut info = GcInfo {
-        recorded: true,
-        gc_bias_frame: max_frame_index,
-        gc_frame_scores: node.scores.gc_frame_scores,
-    };
+    node.state.gc_bias_frame = max_frame_index;
 
     let gene_length: isize = if node.position.strand == Strand::Forward {
         node.position.stop_value + 3 - node.position.index as isize
@@ -230,10 +209,10 @@ fn node_gc_info(node: &Node, frame_counts: &[i32; 3]) -> GcInfo {
             .iter()
             .enumerate()
             .for_each(|(frame_index, &count)| {
-                info.gc_frame_scores[frame_index] = (3.0 * count as f64) / (gene_length as f64);
+                node.scores.gc_frame_scores[frame_index] =
+                    (3.0 * count as f64) / (gene_length as f64);
             });
     }
-    info
 }
 
 /// Find the frame with maximum count
@@ -384,20 +363,23 @@ mod tests {
         ];
         let mut frame_counts = [[0i32; 3]; 3];
         let mut last_position = [0; 3];
-        let mut gc_info = vec![GcInfo::default(); nodes.len()];
 
+        let (mut forward, _) = split_by_strand(&mut nodes);
         process_forward_strand(
             &gc_frame_data,
-            &nodes,
-            &mut gc_info,
+            &mut forward,
             &mut frame_counts,
             &mut last_position,
         );
 
         // Verify processing completed without errors
-        assert!(gc_info[0].recorded);
-        assert!(gc_info[0].gc_frame_scores.iter().any(|&score| score >= 0.0));
-        nodes[0].scores.gc_frame_scores = gc_info[0].gc_frame_scores;
+        assert!(
+            nodes[0]
+                .scores
+                .gc_frame_scores
+                .iter()
+                .any(|&score| score >= 0.0)
+        );
     }
 
     #[test]
@@ -409,19 +391,16 @@ mod tests {
         ];
         let mut frame_counts = [[0i32; 3]; 3];
         let mut last_position = [0; 3];
-        let mut gc_info = vec![GcInfo::default(); nodes.len()];
 
+        let (_, mut reverse) = split_by_strand(&mut nodes);
         process_reverse_strand(
             &gc_frame_data,
-            &nodes,
-            &mut gc_info,
+            &mut reverse,
             &mut frame_counts,
             &mut last_position,
         );
 
         // Verify processing completed without errors
-        assert!(gc_info[0].recorded);
-        nodes[0].scores.gc_frame_scores = gc_info[0].gc_frame_scores;
         assert!(
             nodes[0]
                 .scores
@@ -478,37 +457,37 @@ mod tests {
 
     #[test]
     fn test_update_node_gc_info_forward() {
-        let node = create_test_node(Strand::Forward, 3, CodonType::Atg, 12);
+        let mut node = create_test_node(Strand::Forward, 3, CodonType::Atg, 12);
         let frame_counts = [5, 3, 2];
 
-        let info = node_gc_info(&node, &frame_counts);
+        update_node_gc_info(&mut node, &frame_counts);
 
         // Should select frame with maximum count (frame 0)
-        assert_eq!(info.gc_bias_frame, 0);
-        assert!(info.gc_frame_scores[0] > 0.0);
+        assert_eq!(node.state.gc_bias_frame, 0);
+        assert!(node.scores.gc_frame_scores[0] > 0.0);
     }
 
     #[test]
     fn test_update_node_gc_info_reverse() {
-        let node = create_test_node(Strand::Reverse, 12, CodonType::Atg, 3);
+        let mut node = create_test_node(Strand::Reverse, 12, CodonType::Atg, 3);
         let frame_counts = [2, 5, 3];
 
-        let info = node_gc_info(&node, &frame_counts);
+        update_node_gc_info(&mut node, &frame_counts);
 
         // Should select frame with maximum count (frame 1)
-        assert_eq!(info.gc_bias_frame, 1);
-        assert!(info.gc_frame_scores[1] > 0.0);
+        assert_eq!(node.state.gc_bias_frame, 1);
+        assert!(node.scores.gc_frame_scores[1] > 0.0);
     }
 
     #[test]
     fn test_update_node_gc_info_zero_gene_length() {
-        let node = create_test_node(Strand::Forward, 6, CodonType::Atg, 6);
+        let mut node = create_test_node(Strand::Forward, 6, CodonType::Atg, 6);
         let frame_counts = [5, 3, 2];
 
-        let info = node_gc_info(&node, &frame_counts);
+        update_node_gc_info(&mut node, &frame_counts);
 
         // Should handle zero gene length gracefully
-        assert_eq!(info.gc_bias_frame, 0);
+        assert_eq!(node.state.gc_bias_frame, 0);
     }
 
     #[test]

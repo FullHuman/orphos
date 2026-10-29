@@ -17,6 +17,9 @@ use crate::{
 
 use bio::bio_types::strand::Strand;
 
+use crate::node::strands::{StrandNodes, has_start_before_stop, split_by_strand};
+use crate::parallel;
+
 /// Context struct containing sequence data and metadata
 #[derive(Debug)]
 pub struct ScoringContext<'a> {
@@ -658,50 +661,43 @@ fn calculate_no_stop_probability(gc_content: f64, translation_table: i32) -> f64
     }
 }
 
-/// Process nodes for a specific strand in the first pass (dicodon scoring)
-///
-/// This calculates cumulative dicodon scores from stop codons to start codons
-/// The three passes of the raw coding score for the nodes of one strand.
-///
-/// The passes of a strand read and write the coding scores of that strand's
-/// nodes only, so the two strands are scored on two threads, each into its
-/// own copy of the scores (`coding_scores[i]` for `nodes[i]`), which the
-/// caller writes back to the nodes of the strand.
+/// The three passes of the raw coding score over the nodes of one strand:
+/// cumulative dicodon scores from stop to start, normalisation to the
+/// frame's maximum, length factors. The first pass starts from, and leaves
+/// behind, the position of the last node it saw in each frame.
+#[allow(clippy::too_many_arguments)]
 fn strand_coding_scores(
-    nodes: &[Node],
+    nodes: &mut StrandNodes,
     encoded_sequence: &[u8],
     sequence_length: usize,
     strand: Strand,
     training: &Training,
     no_stop_probability: f64,
-) -> Vec<f64> {
-    let mut coding_scores: Vec<f64> = nodes.iter().map(|node| node.scores.coding_score).collect();
+    last_positions: &mut [usize; 3],
+) {
     let mut frame_scores = [0.0; 3];
-    let mut last_positions = [0usize; 3];
     process_strand_first_pass(
         nodes,
-        &mut coding_scores,
         encoded_sequence,
         sequence_length,
         strand,
         training,
         &mut frame_scores,
-        &mut last_positions,
+        last_positions,
     );
-    process_strand_second_pass(nodes, &mut coding_scores, strand, &mut frame_scores);
-    process_strand_third_pass(
-        nodes,
-        &mut coding_scores,
-        strand,
-        no_stop_probability,
-        &mut frame_scores,
-    );
-    coding_scores
+    process_strand_second_pass(nodes, strand, &mut frame_scores);
+    process_strand_third_pass(nodes, strand, no_stop_probability, &mut frame_scores);
 }
 
-/// Score both strands with [`strand_coding_scores`], on two threads, and
-/// write the scores back to the nodes.
-fn score_strands_in_parallel(
+/// Score the two strands with [`strand_coding_scores`], each on its own
+/// thread: the passes of a strand touch that strand's nodes only.
+///
+/// Prodigal walks the reverse strand from the per-frame positions the
+/// forward strand's walk left behind. Only a reverse start node that no
+/// reverse stop of its frame precedes sees them (a gene wrapping around a
+/// circular sequence); when there is one, the strands are scored one after
+/// the other, as before.
+fn score_strands(
     encoded_sequence: &[u8],
     reverse_complement_encoded_sequence: &[u8],
     sequence_length: usize,
@@ -709,43 +705,60 @@ fn score_strands_in_parallel(
     training: &Training,
     no_stop_probability: f64,
 ) {
-    let (forward, reverse) = rayon::join(
-        || {
-            strand_coding_scores(
-                nodes,
-                encoded_sequence,
-                sequence_length,
-                Strand::Forward,
-                training,
-                no_stop_probability,
-            )
-        },
-        || {
-            strand_coding_scores(
-                nodes,
-                reverse_complement_encoded_sequence,
-                sequence_length,
-                Strand::Reverse,
-                training,
-                no_stop_probability,
-            )
-        },
-    );
-    for (node, (&forward_score, &reverse_score)) in
-        nodes.iter_mut().zip(forward.iter().zip(&reverse))
-    {
-        match node.position.strand {
-            Strand::Forward => node.scores.coding_score = forward_score,
-            Strand::Reverse => node.scores.coding_score = reverse_score,
-            Strand::Unknown => {}
-        }
+    let (mut forward, mut reverse) = split_by_strand(nodes);
+    let mut last_positions = [0usize; 3];
+    if has_start_before_stop(&reverse) {
+        strand_coding_scores(
+            &mut forward,
+            encoded_sequence,
+            sequence_length,
+            Strand::Forward,
+            training,
+            no_stop_probability,
+            &mut last_positions,
+        );
+        strand_coding_scores(
+            &mut reverse,
+            reverse_complement_encoded_sequence,
+            sequence_length,
+            Strand::Reverse,
+            training,
+            no_stop_probability,
+            &mut last_positions,
+        );
+    } else {
+        parallel::join(
+            || {
+                strand_coding_scores(
+                    &mut forward,
+                    encoded_sequence,
+                    sequence_length,
+                    Strand::Forward,
+                    training,
+                    no_stop_probability,
+                    &mut last_positions,
+                )
+            },
+            || {
+                strand_coding_scores(
+                    &mut reverse,
+                    reverse_complement_encoded_sequence,
+                    sequence_length,
+                    Strand::Reverse,
+                    training,
+                    no_stop_probability,
+                    &mut [0usize; 3],
+                )
+            },
+        );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Process nodes for a specific strand in the first pass (dicodon scoring)
+///
+/// This calculates cumulative dicodon scores from stop codons to start codons
 fn process_strand_first_pass(
-    nodes: &[Node],
-    coding_scores: &mut [f64],
+    nodes: &mut StrandNodes,
     encoded_sequence: &[u8],
     sequence_length: usize,
     strand: Strand,
@@ -757,15 +770,11 @@ fn process_strand_first_pass(
 
     if strand == Strand::Forward {
         // Process forward strand in reverse order (from end to start)
-        for i in (0..nodes.len()).rev() {
-            if nodes[i].position.strand != Strand::Forward {
-                continue;
-            }
+        for node in nodes.iter_mut().rev() {
+            let frame_index = node.position.index % 3;
 
-            let frame_index = nodes[i].position.index % 3;
-
-            if nodes[i].position.codon_type == CodonType::Stop {
-                last_positions[frame_index] = nodes[i].position.index;
+            if node.position.codon_type == CodonType::Stop {
+                last_positions[frame_index] = node.position.index;
                 frame_scores[frame_index] = 0.0;
             } else {
                 // Calculate dicodon scores from last stop to current start
@@ -773,7 +782,7 @@ fn process_strand_first_pass(
                     let mut j = last_positions[frame_index] - 3;
                     let mut previous_mer = None;
                     loop {
-                        if j < nodes[i].position.index {
+                        if j < node.position.index {
                             break;
                         }
                         let mer_idx = next_dicodon_index(encoded_sequence, j, previous_mer);
@@ -787,17 +796,13 @@ fn process_strand_first_pass(
                         j -= 3;
                     }
                 }
-                coding_scores[i] = frame_scores[frame_index];
-                last_positions[frame_index] = nodes[i].position.index;
+                node.scores.coding_score = frame_scores[frame_index];
+                last_positions[frame_index] = node.position.index;
             }
         }
     } else {
         // Process reverse strand in forward order
-        for (node, coding_score) in nodes.iter().zip(coding_scores.iter_mut()) {
-            if node.position.strand != Strand::Reverse {
-                continue;
-            }
-
+        for node in nodes.iter_mut() {
             let frame_index = node.position.index % 3;
 
             if node.position.codon_type == CodonType::Stop {
@@ -816,7 +821,7 @@ fn process_strand_first_pass(
                     frame_scores[frame_index] += dicodon_score;
                     j += 3;
                 }
-                *coding_score = frame_scores[frame_index];
+                node.scores.coding_score = frame_scores[frame_index];
                 last_positions[frame_index] = node.position.index;
             }
         }
@@ -843,40 +848,30 @@ const CODON_INDEX_MASK: usize = (1 << (2 * CODON_LENGTH)) - 1;
 ///
 /// This normalizes scores relative to the maximum score in each frame
 fn process_strand_second_pass(
-    nodes: &[Node],
-    coding_scores: &mut [f64],
+    nodes: &mut StrandNodes,
     strand: Strand,
     frame_scores: &mut [f64; 3],
 ) {
     frame_scores.fill(CODING_SCORE_SENTINEL);
 
-    let mut process_node = |i: usize| {
-        let node = &nodes[i];
-        if node.position.strand != strand {
-            return;
-        }
-
+    let process_node = |node: &mut Node| {
         let frame_index = node.position.index % 3;
 
         if node.position.codon_type == CodonType::Stop {
             frame_scores[frame_index] = CODING_SCORE_SENTINEL;
-        } else if coding_scores[i] > frame_scores[frame_index] {
-            frame_scores[frame_index] = coding_scores[i];
+        } else if node.scores.coding_score > frame_scores[frame_index] {
+            frame_scores[frame_index] = node.scores.coding_score;
         } else {
-            coding_scores[i] -= frame_scores[frame_index] - coding_scores[i];
+            node.scores.coding_score -= frame_scores[frame_index] - node.scores.coding_score;
         }
     };
 
     if strand == Strand::Forward {
         // Process forward strand in forward order
-        for i in 0..nodes.len() {
-            process_node(i);
-        }
+        nodes.iter_mut().for_each(process_node);
     } else {
         // Process reverse strand in reverse order
-        for i in (0..nodes.len()).rev() {
-            process_node(i);
-        }
+        nodes.iter_mut().rev().for_each(process_node);
     }
 }
 
@@ -916,19 +911,14 @@ fn calculate_length_factor(gene_size_codons: f64, no_stop_probability: f64) -> f
 ///
 /// This adds length factors and applies score thresholds based on gene size
 fn process_strand_third_pass(
-    nodes: &[Node],
-    coding_scores: &mut [f64],
+    nodes: &mut StrandNodes,
     strand: Strand,
     no_stop_probability: f64,
     frame_scores: &mut [f64; 3],
 ) {
     frame_scores.fill(CODING_SCORE_SENTINEL);
 
-    let process_node = |node: &Node, coding_score: &mut f64, frame_scores: &mut [f64; 3]| {
-        if node.position.strand != strand {
-            return;
-        }
-
+    let process_node = |node: &mut Node| {
         let frame_index = node.position.index % 3;
 
         if node.position.codon_type == CodonType::Stop {
@@ -950,24 +940,20 @@ fn process_strand_third_pass(
 
             // Apply length factor threshold
             if adjusted_length_factor > LENGTH_FACTOR_THRESHOLD
-                && *coding_score < LENGTH_FACTOR_MULTIPLIER * adjusted_length_factor
+                && node.scores.coding_score < LENGTH_FACTOR_MULTIPLIER * adjusted_length_factor
             {
-                *coding_score = LENGTH_FACTOR_MULTIPLIER * adjusted_length_factor;
+                node.scores.coding_score = LENGTH_FACTOR_MULTIPLIER * adjusted_length_factor;
             }
-            *coding_score += adjusted_length_factor;
+            node.scores.coding_score += adjusted_length_factor;
         }
     };
 
     if strand == Strand::Forward {
         // Process forward strand in forward order
-        for (node, coding_score) in nodes.iter().zip(coding_scores.iter_mut()) {
-            process_node(node, coding_score, frame_scores);
-        }
+        nodes.iter_mut().for_each(process_node);
     } else {
         // Process reverse strand in reverse order
-        for (node, coding_score) in nodes.iter().zip(coding_scores.iter_mut()).rev() {
-            process_node(node, coding_score, frame_scores);
-        }
+        nodes.iter_mut().rev().for_each(process_node);
     }
 }
 
@@ -987,7 +973,7 @@ pub fn raw_coding_score_optimized(
 ) {
     // The three passes, per strand: cumulative dicodon scores from stop to
     // start, normalisation to the frame's maximum, length factors.
-    score_strands_in_parallel(
+    score_strands(
         encoded_sequence,
         reverse_complement_encoded_sequence,
         sequence_length,
@@ -1012,7 +998,7 @@ pub fn raw_coding_score(
 ) {
     let no_stop_probability =
         calculate_no_stop_probability(training.gc_content, training.translation_table);
-    score_strands_in_parallel(
+    score_strands(
         encoded_sequence,
         reverse_complement_encoded_sequence,
         sequence_length,
@@ -1545,15 +1531,14 @@ mod tests {
         let mut frame_scores = [0.0; 3];
         let mut last_positions = [0usize; 3];
 
-        let nodes = vec![
+        let mut nodes = vec![
             create_test_node(Strand::Forward, 3, CodonType::Atg, 12),
             create_test_node(Strand::Forward, 12, CodonType::Stop, 12),
         ];
 
-        let mut coding_scores = vec![0.0; nodes.len()];
+        let (mut forward, _) = split_by_strand(&mut nodes);
         process_strand_first_pass(
-            &nodes,
-            &mut coding_scores,
+            &mut forward,
             &seq,
             seq.len(),
             Strand::Forward,
@@ -1563,53 +1548,50 @@ mod tests {
         );
 
         // Should have calculated coding scores
-        assert!(coding_scores[0].is_finite());
+        assert!(nodes[0].scores.coding_score.is_finite());
     }
 
     #[test]
     fn test_process_strand_second_pass_forward() {
-        let nodes = vec![
+        let mut nodes = vec![
             create_test_node(Strand::Forward, 3, CodonType::Atg, 12),
             create_test_node(Strand::Forward, 6, CodonType::Gtg, 15),
         ];
 
         // Set initial coding scores
-        let mut coding_scores = vec![10.0, 5.0];
+        nodes[0].scores.coding_score = 10.0;
+        nodes[1].scores.coding_score = 5.0;
 
         let mut frame_scores = [0.0; 3];
 
-        process_strand_second_pass(
-            &nodes,
-            &mut coding_scores,
-            Strand::Forward,
-            &mut frame_scores,
-        );
+        let (mut forward, _) = split_by_strand(&mut nodes);
+        process_strand_second_pass(&mut forward, Strand::Forward, &mut frame_scores);
 
         // Should have adjusted scores based on maximums
-        assert!(coding_scores[0].is_finite());
-        assert!(coding_scores[1].is_finite());
+        assert!(nodes[0].scores.coding_score.is_finite());
+        assert!(nodes[1].scores.coding_score.is_finite());
     }
 
     #[test]
     fn test_process_strand_third_pass_forward() {
-        let nodes = vec![create_test_node(Strand::Forward, 3, CodonType::Atg, 300)];
+        let mut nodes = vec![create_test_node(Strand::Forward, 3, CodonType::Atg, 300)];
 
         // Set initial coding score
-        let mut coding_scores = vec![5.0];
+        nodes[0].scores.coding_score = 5.0;
 
         let no_stop_probability = 0.95;
         let mut frame_scores = [0.0; 3];
 
+        let (mut forward, _) = split_by_strand(&mut nodes);
         process_strand_third_pass(
-            &nodes,
-            &mut coding_scores,
+            &mut forward,
             Strand::Forward,
             no_stop_probability,
             &mut frame_scores,
         );
 
         // Should have added length factor to coding score
-        assert!(coding_scores[0] > 5.0);
-        assert!(coding_scores[0].is_finite());
+        assert!(nodes[0].scores.coding_score > 5.0);
+        assert!(nodes[0].scores.coding_score.is_finite());
     }
 }

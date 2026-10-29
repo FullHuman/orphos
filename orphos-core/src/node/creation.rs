@@ -226,62 +226,67 @@ pub fn add_nodes(
 
     let codon_tables = ByteCodonTable::new(&CodonTables::new(training));
 
-    // The two strands are independent; their nodes are created on two
-    // threads, the forward strand's first as before. Sorting follows, so
-    // the order within the vector does not matter beyond that.
-    let (_, mut reverse_nodes) = rayon::join(
-        || {
-            let mut context = StrandProcessingContext::new(
-                sequence_length,
-                sequence_length_mod,
-                closed,
-                circular,
-            );
-            context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
-            process_forward_strand(
-                &encoded_sequence.forward_sequence,
-                nodes,
-                &mut context,
-                &encoded_sequence.masks,
-                training,
-                &codon_tables,
-            );
-            handle_remaining_starts(
-                &encoded_sequence.forward_sequence,
-                nodes,
-                &context,
-                Strand::Forward,
-                training,
-            );
-        },
-        || {
-            let mut reverse_nodes = Vec::with_capacity(STT_NOD.max(sequence_length / 32));
-            let mut context = StrandProcessingContext::new(
-                sequence_length,
-                sequence_length_mod,
-                closed,
-                circular,
-            );
-            context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
-            process_reverse_strand(
-                &encoded_sequence.reverse_complement_sequence,
-                &mut reverse_nodes,
-                &mut context,
-                &encoded_sequence.masks,
-                training,
-                &codon_tables,
-            );
-            handle_remaining_starts(
-                &encoded_sequence.reverse_complement_sequence,
-                &mut reverse_nodes,
-                &context,
-                Strand::Reverse,
-                training,
-            );
-            reverse_nodes
-        },
-    );
-    nodes.append(&mut reverse_nodes);
+    let create_forward_nodes = |nodes: &mut Vec<Node>| {
+        let mut context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+        context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
+        process_forward_strand(
+            &encoded_sequence.forward_sequence,
+            nodes,
+            &mut context,
+            &encoded_sequence.masks,
+            training,
+            &codon_tables,
+        );
+        handle_remaining_starts(
+            &encoded_sequence.forward_sequence,
+            nodes,
+            &context,
+            Strand::Forward,
+            training,
+        );
+    };
+    let create_reverse_nodes = |nodes: &mut Vec<Node>| {
+        let mut context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+        context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
+        process_reverse_strand(
+            &encoded_sequence.reverse_complement_sequence,
+            nodes,
+            &mut context,
+            &encoded_sequence.masks,
+            training,
+            &codon_tables,
+        );
+        handle_remaining_starts(
+            &encoded_sequence.reverse_complement_sequence,
+            nodes,
+            &context,
+            Strand::Reverse,
+            training,
+        );
+    };
+
+    // The two strands are independent. With two threads or more, their
+    // nodes are created at the same time, the reverse strand's in a vector
+    // of its own that is appended afterwards (sorting follows, so the order
+    // within the vector does not matter beyond that). On one thread the
+    // copy that the append is would be a waste, so both strands' nodes go
+    // straight into `nodes`.
+    if rayon::current_num_threads() > 1 {
+        let (_, mut reverse_nodes) = rayon::join(
+            || create_forward_nodes(nodes),
+            || {
+                let mut reverse_nodes = Vec::with_capacity(STT_NOD.max(sequence_length / 32));
+                create_reverse_nodes(&mut reverse_nodes);
+                reverse_nodes
+            },
+        );
+        nodes.append(&mut reverse_nodes);
+    } else {
+        create_forward_nodes(nodes);
+        create_reverse_nodes(nodes);
+    }
 
     Ok(nodes.len())
 }

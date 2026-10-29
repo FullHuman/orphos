@@ -1,4 +1,5 @@
 use bio::bio_types::strand::Strand;
+use rayon::prelude::*;
 
 use crate::types::{Motif, Node, NodeState};
 
@@ -48,7 +49,12 @@ pub fn sort_nodes_by_position(nodes: &mut [Node]) {
             )
         })
         .collect();
-    keys.sort_unstable();
+    // The keys are unique, so the order is the same whichever sort finds it.
+    if rayon::current_num_threads() > 1 {
+        keys.par_sort_unstable();
+    } else {
+        keys.sort_unstable();
+    }
 
     // `source[i]` is the original index of the node that belongs at `i`.
     // Each cycle of the permutation is followed from its first position,

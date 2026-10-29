@@ -15,6 +15,7 @@ use crate::node::{
     record_overlapping_starts, reset_node_scores, reset_nodes_to_pristine, score_nodes,
     score_nodes_with_orf_gc, sort_nodes_by_position,
 };
+use crate::parallel;
 use crate::results::{OrphosResults, SequenceInfo};
 use crate::sequence::calc_most_gc_frame;
 use crate::sequence::encoded::EncodedSequence;
@@ -260,7 +261,7 @@ impl UntrainedOrphos {
         // The GC frame plot depends on the sequence alone, so it is computed
         // while the nodes are created and sorted.
         let mut nodes = Vec::new();
-        let (created, gc_frame) = rayon::join(
+        let (created, gc_frame) = parallel::join(
             || {
                 let num_nodes = add_nodes(
                     encoded_sequence,

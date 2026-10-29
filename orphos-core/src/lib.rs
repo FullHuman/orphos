@@ -102,6 +102,7 @@ pub mod engine;
 pub mod metagenomic;
 pub mod node;
 pub mod output;
+mod parallel;
 pub mod results;
 pub mod sequence;
 pub mod training;
