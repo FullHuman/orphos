@@ -1,4 +1,5 @@
 use bio::bio_types::strand::Strand;
+use rayon::prelude::*;
 
 use crate::types::{Motif, Node, NodeState};
 
@@ -28,10 +29,11 @@ pub fn reset_node_scores(nodes: &mut [Node]) {
 /// Sorts nodes first by sequence position, then by strand (forward before reverse).
 /// This ordering is critical for dynamic programming algorithms that process
 /// nodes in genomic order.
-pub fn sort_nodes_by_position(nodes: &mut Vec<Node>) {
-    // Nodes are large, so sort a compact key array and gather the nodes once
-    // instead of moving them while sorting. Keys are unique for nodes created
-    // by `add_nodes`, which makes the order fully determined.
+pub fn sort_nodes_by_position(nodes: &mut [Node]) {
+    // Nodes are large, so sort a compact key array and then move each node
+    // once, in place, instead of moving them while sorting or gathering them
+    // into a second array as large as the first. Keys are unique for nodes
+    // created by `add_nodes`, which makes the order fully determined.
     let mut keys: Vec<(u64, u32)> = nodes
         .iter()
         .enumerate()
@@ -47,13 +49,48 @@ pub fn sort_nodes_by_position(nodes: &mut Vec<Node>) {
             )
         })
         .collect();
-    keys.sort_unstable();
+    // The keys are unique, so the order is the same whichever sort finds it.
+    if rayon::current_num_threads() > 1 {
+        keys.par_sort_unstable();
+    } else {
+        keys.sort_unstable();
+    }
 
-    let sorted: Vec<Node> = keys
-        .iter()
-        .map(|&(_, original)| nodes[original as usize].clone())
-        .collect();
-    *nodes = sorted;
+    // `source[i]` is the original index of the node that belongs at `i`.
+    // Each cycle of the permutation is followed from its first position,
+    // moving every node of the cycle once; `source[i] = i` marks a position
+    // as done.
+    let mut source: Vec<u32> = keys.into_iter().map(|(_, original)| original).collect();
+    for start in 0..source.len() {
+        if source[start] as usize == start {
+            continue;
+        }
+        let displaced = std::mem::take(&mut nodes[start]);
+        let mut position = start;
+        loop {
+            let from = source[position] as usize;
+            source[position] = position as u32;
+            if from == start {
+                nodes[position] = displaced;
+                break;
+            }
+            nodes[position] = std::mem::take(&mut nodes[from]);
+            position = from;
+        }
+    }
+}
+
+/// Return nodes to the state `add_nodes` created them in: their positions
+/// stay, every score, motif and dynamic programming field goes back to its
+/// default. Nodes sorted once can then be scored again, as for the gene
+/// prediction that follows training on the same sequence, without being
+/// created and sorted a second time.
+pub fn reset_nodes_to_pristine(nodes: &mut [Node]) {
+    for node in nodes {
+        node.scores = Default::default();
+        node.state = Default::default();
+        node.motif_info = Default::default();
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -142,6 +179,42 @@ mod tests {
         let mut nodes: Vec<Node> = vec![];
         reset_node_scores(&mut nodes);
         assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn pristine_nodes_match_freshly_created_ones() {
+        use crate::node::add_nodes;
+        use crate::sequence::encoded::EncodedSequence;
+        use crate::types::Training;
+
+        let sequence: Vec<u8> =
+            b"ATGAAACGCATTAGCACCACCATTACCACCACCATCACCATTACCACAGGTAACGGTGCGGGCTGATAG"
+                .iter()
+                .cycle()
+                .take(4000)
+                .copied()
+                .collect();
+        let encoded = EncodedSequence::with_masking(&sequence);
+        let training = Training {
+            translation_table: 11,
+            ..Default::default()
+        };
+        let mut nodes = Vec::new();
+        add_nodes(&encoded, &mut nodes, true, false, &training).unwrap();
+        sort_nodes_by_position(&mut nodes);
+        let fresh = format!("{nodes:?}");
+
+        for (index, node) in nodes.iter_mut().enumerate() {
+            node.scores.coding_score = index as f64;
+            node.scores.gc_frame_scores = [1.0, 2.0, 3.0];
+            node.state.traceback = Some(index);
+            node.state.gc_bias_frame = 2;
+            node.motif_info.ribosome_binding_sites = [3, 4];
+            node.motif_info.best_motif.score = 5.0;
+        }
+        reset_nodes_to_pristine(&mut nodes);
+
+        assert_eq!(format!("{nodes:?}"), fresh);
     }
 
     #[test]

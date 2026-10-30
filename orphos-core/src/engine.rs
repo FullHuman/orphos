@@ -12,9 +12,10 @@ use crate::metagenomic::bins;
 use crate::metagenomic::get_preset_training_ref;
 use crate::node::{
     add_nodes, calc_orf_gc, calculate_dicodon_gene, raw_coding_score, rbs_score, record_gc_bias,
-    record_overlapping_starts, reset_node_scores, score_nodes, score_nodes_with_orf_gc,
-    sort_nodes_by_position,
+    record_overlapping_starts, reset_node_scores, reset_nodes_to_pristine, score_nodes,
+    score_nodes_with_orf_gc, sort_nodes_by_position,
 };
+use crate::parallel;
 use crate::results::{OrphosResults, SequenceInfo};
 use crate::sequence::calc_most_gc_frame;
 use crate::sequence::encoded::EncodedSequence;
@@ -216,6 +217,18 @@ impl UntrainedOrphos {
         &mut self,
         encoded_sequence: &EncodedSequence,
     ) -> Result<TrainedOrphos, OrphosError> {
+        self.train_single_genome_keeping_nodes(encoded_sequence)
+            .map(|(trained, _)| trained)
+    }
+
+    /// [`Self::train_single_genome`], also returning the nodes it trained
+    /// on, sorted by position. Reset with `reset_nodes_to_pristine`, they are
+    /// the nodes `add_nodes` builds for the same sequence with the trained
+    /// model, so the gene prediction that follows can start from them.
+    fn train_single_genome_keeping_nodes(
+        &mut self,
+        encoded_sequence: &EncodedSequence,
+    ) -> Result<(TrainedOrphos, Vec<Node>), OrphosError> {
         let sequence_length = encoded_sequence.sequence_length;
         if sequence_length < MIN_SEQUENCE_LENGTH {
             return Err(OrphosError::InvalidSequence(format!(
@@ -245,14 +258,24 @@ impl UntrainedOrphos {
             ..Default::default()
         };
 
+        // The GC frame plot depends on the sequence alone, so it is computed
+        // while the nodes are created and sorted.
         let mut nodes = Vec::new();
-        let num_nodes = add_nodes(
-            encoded_sequence,
-            &mut nodes,
-            self.config.closed_ends,
-            self.config.circular,
-            &training,
-        )?;
+        let (created, gc_frame) = parallel::join(
+            || {
+                let num_nodes = add_nodes(
+                    encoded_sequence,
+                    &mut nodes,
+                    self.config.closed_ends,
+                    self.config.circular,
+                    &training,
+                )?;
+                sort_nodes_by_position(&mut nodes);
+                Ok::<usize, OrphosError>(num_nodes)
+            },
+            || calc_most_gc_frame(&encoded_sequence.forward_sequence, sequence_length),
+        );
+        let num_nodes = created?;
 
         if !self.config.quiet {
             eprintln!(
@@ -260,10 +283,6 @@ impl UntrainedOrphos {
                 num_nodes, self.config.closed_ends
             );
         }
-
-        sort_nodes_by_position(&mut nodes);
-
-        let gc_frame = calc_most_gc_frame(&encoded_sequence.forward_sequence, sequence_length);
 
         record_gc_bias(&gc_frame, &mut nodes, &mut training);
 
@@ -330,11 +349,14 @@ impl UntrainedOrphos {
             eprintln!("Training complete!");
         }
 
-        Ok(Orphos {
-            config: self.config.clone(),
-            training: Some(training),
-            _state: PhantomData,
-        })
+        Ok((
+            Orphos {
+                config: self.config.clone(),
+                training: Some(training),
+                _state: PhantomData,
+            },
+            nodes,
+        ))
     }
 
     pub fn train_meta_genome(
@@ -463,20 +485,34 @@ impl TrainedOrphos {
         )?;
 
         sort_nodes_by_position(&mut nodes);
+        self.find_genes_single_in(encoded_sequence, &mut nodes)
+    }
+
+    /// [`Self::find_genes_single`] on `nodes`, the nodes of `encoded_sequence`
+    /// as `add_nodes` creates them with this model, sorted by position.
+    fn find_genes_single_in(
+        &self,
+        encoded_sequence: &EncodedSequence,
+        nodes: &mut [Node],
+    ) -> Result<Vec<Gene>, OrphosError> {
+        let training = self
+            .training
+            .as_ref()
+            .ok_or_else(|| OrphosError::InvalidSequence("Orphos is not trained".to_string()))?;
 
         // Tap the training state right before scoring to ensure parity at inference time
 
         score_nodes(
             encoded_sequence,
-            &mut nodes,
+            nodes,
             training,
             self.config.closed_ends,
             false,
         )?;
 
-        record_overlapping_starts(&mut nodes, training, true);
+        record_overlapping_starts(nodes, training, true);
 
-        let gene_path = match predict_genes(&mut nodes, training, true) {
+        let gene_path = match predict_genes(nodes, training, true) {
             Some(path) => path,
             None => {
                 // No genes found - return empty gene list
@@ -484,9 +520,9 @@ impl TrainedOrphos {
             }
         };
 
-        eliminate_bad_genes(&mut nodes, Some(gene_path), training);
+        eliminate_bad_genes(nodes, Some(gene_path), training);
 
-        let genes = GeneBuilder::from_nodes(&nodes, gene_path, training, 1)
+        let genes = GeneBuilder::from_nodes(nodes, gene_path, training, 1)
             .with_tweaked_starts()
             .with_annotations()
             .build();
@@ -852,10 +888,15 @@ impl OrphosAnalyzer {
         let encoded_sequence = self.encode_sequence(sequence);
 
         let mut untrained_orphos = UntrainedOrphos::with_config(self.config.clone())?;
-        let trained_orphos = if self.config.metagenomic {
-            untrained_orphos.train_meta_genome(&encoded_sequence)?
+        // Training on a single genome creates and sorts its nodes; the gene
+        // prediction reuses them once their scores are reset, instead of
+        // creating and sorting the same nodes again.
+        let (trained_orphos, mut trained_nodes) = if self.config.metagenomic {
+            (untrained_orphos.train_meta_genome(&encoded_sequence)?, None)
         } else {
-            untrained_orphos.train_single_genome(&encoded_sequence)?
+            let (trained, nodes) =
+                untrained_orphos.train_single_genome_keeping_nodes(&encoded_sequence)?;
+            (trained, Some(nodes))
         };
         let (genes, metagenomic_model, best_training) = if self.config.metagenomic {
             let (genes, best_phase) = trained_orphos.find_genes_meta(&encoded_sequence)?;
@@ -872,7 +913,13 @@ impl OrphosAnalyzer {
             );
             (genes, Some(model_desc), training.clone())
         } else {
-            let genes = trained_orphos.find_genes_single(&encoded_sequence)?;
+            let genes = match trained_nodes.as_mut() {
+                Some(nodes) => {
+                    reset_nodes_to_pristine(nodes);
+                    trained_orphos.find_genes_single_in(&encoded_sequence, nodes)?
+                }
+                None => trained_orphos.find_genes_single(&encoded_sequence)?,
+            };
             let training = trained_orphos.training.clone().unwrap_or_default();
             (genes, None, training)
         };

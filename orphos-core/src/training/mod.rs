@@ -113,6 +113,24 @@ fn count_upstream_composition(
     position: usize,
     training: &mut Training,
 ) {
+    count_upstream_composition_into(
+        sequence,
+        sequence_length,
+        strand,
+        position,
+        &mut training.upstream_composition,
+    );
+}
+
+/// [`count_upstream_composition`] into `upstream_composition` rather than
+/// the training's own counts.
+fn count_upstream_composition_into(
+    sequence: &[u8],
+    sequence_length: usize,
+    strand: Strand,
+    position: usize,
+    upstream_composition: &mut [[f64; NUM_BASES]; UPSTREAM_POSITIONS],
+) {
     let start_position = match strand {
         Strand::Forward => position,
         Strand::Reverse => sequence_length - 1 - position,
@@ -127,7 +145,7 @@ fn count_upstream_composition(
 
         if start_position >= upstream_index {
             let base_index = calculate_kmer_index(1, sequence, start_position - upstream_index);
-            training.upstream_composition[count][base_index] += 1.0;
+            upstream_composition[count][base_index] += 1.0;
         }
         count += 1;
     }

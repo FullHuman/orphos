@@ -1,5 +1,7 @@
 use bio::bio_types::strand::Strand;
 
+use crate::node::strands::{StrandNodes, split_by_strand};
+use crate::parallel;
 use crate::sequence::is_gc;
 use crate::types::{CodonType, Node};
 
@@ -10,19 +12,27 @@ pub fn calc_orf_gc(encoded_sequence: &[u8], sequence_length: usize, nodes: &mut 
     }
 
     let gc_prefix = gc_prefix_counts(encoded_sequence, sequence_length);
-    process_strand(
-        encoded_sequence,
-        &gc_prefix,
-        sequence_length,
-        nodes,
-        Strand::Forward,
-    );
-    process_strand(
-        encoded_sequence,
-        &gc_prefix,
-        sequence_length,
-        nodes,
-        Strand::Reverse,
+    // The strands are independent, so each is walked on its own thread.
+    let (mut forward, mut reverse) = split_by_strand(nodes);
+    parallel::join(
+        || {
+            process_strand(
+                encoded_sequence,
+                &gc_prefix,
+                sequence_length,
+                &mut forward,
+                Strand::Forward,
+            )
+        },
+        || {
+            process_strand(
+                encoded_sequence,
+                &gc_prefix,
+                sequence_length,
+                &mut reverse,
+                Strand::Reverse,
+            )
+        },
     );
 }
 
@@ -38,80 +48,48 @@ fn gc_prefix_counts(encoded_sequence: &[u8], sequence_length: usize) -> Vec<u32>
     counts
 }
 
+/// Walk the nodes of `strand`, from the end of the sequence for the forward
+/// strand and from its start for the reverse strand, recording the GC
+/// content of every start node's ORF.
 fn process_strand(
     encoded_sequence: &[u8],
     gc_prefix: &[u32],
     sequence_length: usize,
-    nodes: &mut [Node],
+    nodes: &mut StrandNodes,
     strand: Strand,
 ) {
     let mut gc = [0.0f64; 3];
     let mut last = [0usize; 3];
 
-    // Process nodes in the appropriate order without heap allocation
+    let process_node = |node: &mut Node| {
+        let frame = node.position.index % 3;
+
+        if node.position.codon_type == CodonType::Stop {
+            update_stop_codon_gc(
+                encoded_sequence,
+                sequence_length,
+                node,
+                &mut gc,
+                &mut last,
+                frame,
+                strand,
+            );
+        } else {
+            update_start_codon_gc(
+                gc_prefix,
+                sequence_length,
+                node,
+                &mut gc,
+                &mut last,
+                frame,
+                strand,
+            );
+        }
+    };
+
     match strand {
-        Strand::Forward => {
-            for node in nodes.iter_mut().rev() {
-                if node.position.strand != strand {
-                    continue;
-                }
-
-                let frame = node.position.index % 3;
-
-                if node.position.codon_type == CodonType::Stop {
-                    update_stop_codon_gc(
-                        encoded_sequence,
-                        sequence_length,
-                        node,
-                        &mut gc,
-                        &mut last,
-                        frame,
-                        strand,
-                    );
-                } else {
-                    update_start_codon_gc(
-                        gc_prefix,
-                        sequence_length,
-                        node,
-                        &mut gc,
-                        &mut last,
-                        frame,
-                        strand,
-                    );
-                }
-            }
-        }
-        Strand::Reverse => {
-            for node in nodes.iter_mut() {
-                if node.position.strand != strand {
-                    continue;
-                }
-
-                let frame = node.position.index % 3;
-
-                if node.position.codon_type == CodonType::Stop {
-                    update_stop_codon_gc(
-                        encoded_sequence,
-                        sequence_length,
-                        node,
-                        &mut gc,
-                        &mut last,
-                        frame,
-                        strand,
-                    );
-                } else {
-                    update_start_codon_gc(
-                        gc_prefix,
-                        sequence_length,
-                        node,
-                        &mut gc,
-                        &mut last,
-                        frame,
-                        strand,
-                    );
-                }
-            }
-        }
+        Strand::Forward => nodes.iter_mut().rev().for_each(process_node),
+        Strand::Reverse => nodes.iter_mut().for_each(process_node),
         Strand::Unknown => (), // Handle gracefully instead of panic
     }
 }
@@ -129,6 +107,7 @@ fn update_stop_codon_gc(
     gc[frame] = calculate_codon_gc(seq, sequence_length, node.position.index, strand);
 }
 
+/// Account for the start node `node` and record the GC content of its ORF.
 fn update_start_codon_gc(
     gc_prefix: &[u32],
     sequence_length: usize,
@@ -555,11 +534,12 @@ mod tests {
         ];
 
         let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        let (mut forward, _) = split_by_strand(&mut nodes);
         process_strand(
             &encoded_seq,
             &prefix,
             sequence.len(),
-            &mut nodes,
+            &mut forward,
             Strand::Forward,
         );
 
@@ -577,11 +557,12 @@ mod tests {
         ];
 
         let prefix = gc_prefix_counts(&encoded_seq, sequence.len());
+        let (_, mut reverse) = split_by_strand(&mut nodes);
         process_strand(
             &encoded_seq,
             &prefix,
             sequence.len(),
-            &mut nodes,
+            &mut reverse,
             Strand::Reverse,
         );
 

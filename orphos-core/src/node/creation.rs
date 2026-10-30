@@ -218,49 +218,75 @@ pub fn add_nodes(
     let sequence_length = encoded_sequence.sequence_length;
     // Clear the nodes vector
     nodes.clear();
-    nodes.reserve(STT_NOD);
+    // Enough for the start and stop codons of a typical genome (one node
+    // every twenty bases or so), so the vector rarely has to grow and copy.
+    nodes.reserve(STT_NOD.max(sequence_length / 16));
 
     let sequence_length_mod = sequence_length % READING_FRAMES;
 
     let codon_tables = ByteCodonTable::new(&CodonTables::new(training));
 
-    let mut context =
-        StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
-    context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
-    process_forward_strand(
-        &encoded_sequence.forward_sequence,
-        nodes,
-        &mut context,
-        &encoded_sequence.masks,
-        training,
-        &codon_tables,
-    );
-    handle_remaining_starts(
-        &encoded_sequence.forward_sequence,
-        nodes,
-        &context,
-        Strand::Forward,
-        training,
-    );
+    let create_forward_nodes = |nodes: &mut Vec<Node>| {
+        let mut context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+        context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
+        process_forward_strand(
+            &encoded_sequence.forward_sequence,
+            nodes,
+            &mut context,
+            &encoded_sequence.masks,
+            training,
+            &codon_tables,
+        );
+        handle_remaining_starts(
+            &encoded_sequence.forward_sequence,
+            nodes,
+            &context,
+            Strand::Forward,
+            training,
+        );
+    };
+    let create_reverse_nodes = |nodes: &mut Vec<Node>| {
+        let mut context =
+            StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
+        context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
+        process_reverse_strand(
+            &encoded_sequence.reverse_complement_sequence,
+            nodes,
+            &mut context,
+            &encoded_sequence.masks,
+            training,
+            &codon_tables,
+        );
+        handle_remaining_starts(
+            &encoded_sequence.reverse_complement_sequence,
+            nodes,
+            &context,
+            Strand::Reverse,
+            training,
+        );
+    };
 
-    let mut context =
-        StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
-    context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
-    process_reverse_strand(
-        &encoded_sequence.reverse_complement_sequence,
-        nodes,
-        &mut context,
-        &encoded_sequence.masks,
-        training,
-        &codon_tables,
-    );
-    handle_remaining_starts(
-        &encoded_sequence.reverse_complement_sequence,
-        nodes,
-        &context,
-        Strand::Reverse,
-        training,
-    );
+    // The two strands are independent. With two threads or more, their
+    // nodes are created at the same time, the reverse strand's in a vector
+    // of its own that is appended afterwards (sorting follows, so the order
+    // within the vector does not matter beyond that). On one thread the
+    // copy that the append is would be a waste, so both strands' nodes go
+    // straight into `nodes`.
+    if rayon::current_num_threads() > 1 {
+        let (_, mut reverse_nodes) = rayon::join(
+            || create_forward_nodes(nodes),
+            || {
+                let mut reverse_nodes = Vec::with_capacity(STT_NOD.max(sequence_length / 32));
+                create_reverse_nodes(&mut reverse_nodes);
+                reverse_nodes
+            },
+        );
+        nodes.append(&mut reverse_nodes);
+    } else {
+        create_forward_nodes(nodes);
+        create_reverse_nodes(nodes);
+    }
 
     Ok(nodes.len())
 }

@@ -11,6 +11,7 @@ mod motifs;
 mod overlaps;
 mod record_gc_bias;
 mod scoring;
+pub(crate) mod strands;
 mod utilities;
 mod validation;
 
@@ -23,7 +24,7 @@ pub use overlaps::{
 };
 pub use record_gc_bias::record_gc_bias;
 pub use scoring::{raw_coding_score, score_nodes, score_nodes_with_orf_gc};
-pub use utilities::{reset_node_scores, sort_nodes_by_position};
+pub use utilities::{reset_node_scores, reset_nodes_to_pristine, sort_nodes_by_position};
 
 #[cfg(test)]
 mod tests {

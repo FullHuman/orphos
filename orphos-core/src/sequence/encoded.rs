@@ -1,7 +1,5 @@
 use crate::{
-    sequence::{
-        create_reverse_complement_sequence, encode_sequence, encode_sequence_simd_wide_packed,
-    },
+    sequence::{create_reverse_complement_sequence, encode_sequence_simd_wide_packed, find_n_runs},
     types::Mask,
 };
 
@@ -21,14 +19,12 @@ impl EncodedSequence {
         let mut forward_sequence: Vec<u8> = vec![0; (nucleotide_length * 2).div_ceil(8)];
         let mut unknown_sequence: Vec<u8> = vec![0; nucleotide_length.div_ceil(8)];
 
-        let mut masks = vec![];
+        let masks = find_n_runs(sequence);
 
-        let gc_content = encode_sequence(
+        let gc_content = encode_sequence_simd_wide_packed(
             sequence,
             &mut forward_sequence,
             &mut unknown_sequence,
-            &mut masks,
-            true,
         )
         .unwrap();
         let reverse_complement_sequence = create_reverse_complement_sequence(
