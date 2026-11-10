@@ -544,15 +544,17 @@ impl TrainedOrphos {
 
     /// Scores `nodes` with the model of `preset` and predicts its genes.
     ///
-    /// Returns the score of the prediction, if there is one, and the genes
-    /// unless a prediction with a higher score is known already.
+    /// Returns the score of the prediction and its genes, the genes unless
+    /// a prediction with a higher score is known already. A preset that
+    /// finds no path through the nodes predicts no genes with a score of
+    /// zero.
     fn score_preset(
         &self,
         sequence: &PresetSequence,
         nodes: &mut [Node],
         workspace: &mut DpWorkspace,
         preset: usize,
-    ) -> Result<Option<PresetCandidate>, OrphosError> {
+    ) -> Result<PresetCandidate, OrphosError> {
         let PresetSequence {
             encoded_sequence,
             node_motif_sites,
@@ -585,11 +587,11 @@ impl TrainedOrphos {
             // as a prediction of no genes with a score of zero, so that a
             // sequence no preset finds a gene in is reported under the
             // first preset tried, not under preset 0.
-            return Ok(Some(PresetCandidate {
+            return Ok(PresetCandidate {
                 preset,
                 score: 0.0,
                 genes: Some(Vec::new()),
-            }));
+            });
         };
 
         let may_be_best = {
@@ -606,11 +608,11 @@ impl TrainedOrphos {
                 .with_annotations()
                 .build()
         });
-        Ok(Some(PresetCandidate {
+        Ok(PresetCandidate {
             preset,
             score,
             genes,
-        }))
+        })
     }
 
     fn find_genes_meta(
@@ -702,12 +704,12 @@ impl TrainedOrphos {
             // the nodes after them are. So the first preset scores the
             // nodes as they were created, and every other preset the nodes
             // as the first one left them, in whatever order they run.
-            candidates.extend(self.score_preset(&sequence, &mut nodes, &mut workspace, first)?);
+            candidates.push(self.score_preset(&sequence, &mut nodes, &mut workspace, first)?);
 
             let copies = NodeCopies::reserve(rest.len(), &nodes);
-            if copies.count < 2 {
+            if copies.count == 0 {
                 for &preset in rest {
-                    candidates.extend(self.score_preset(
+                    candidates.push(self.score_preset(
                         &sequence,
                         &mut nodes,
                         &mut workspace,
@@ -715,24 +717,28 @@ impl TrainedOrphos {
                     )?);
                 }
             } else {
-                // Each worker scores its share of the presets on its own
-                // copy of the nodes.
-                let nodes = &nodes;
-                let scored: Vec<Vec<PresetCandidate>> = (0..copies.count)
+                // Each worker scores its share of the presets on nodes of
+                // its own: one on the nodes themselves, the others on copies.
+                let mut node_copies: Vec<Vec<Node>> = (0..copies.count)
                     .into_par_iter()
-                    .map(|worker| {
-                        let mut nodes = nodes.clone();
+                    .map(|_| nodes.clone())
+                    .collect();
+                let worker_nodes: Vec<&mut Vec<Node>> = std::iter::once(&mut nodes)
+                    .chain(node_copies.iter_mut())
+                    .collect();
+                let workers = worker_nodes.len();
+                let scored: Vec<Vec<PresetCandidate>> = worker_nodes
+                    .into_par_iter()
+                    .enumerate()
+                    .map(|(worker, nodes)| {
                         let mut workspace = DpWorkspace::default();
-                        let mut scored = Vec::new();
-                        for &preset in rest.iter().skip(worker).step_by(copies.count) {
-                            scored.extend(self.score_preset(
-                                &sequence,
-                                &mut nodes,
-                                &mut workspace,
-                                preset,
-                            )?);
-                        }
-                        Ok(scored)
+                        rest.iter()
+                            .skip(worker)
+                            .step_by(workers)
+                            .map(|&preset| {
+                                self.score_preset(&sequence, nodes, &mut workspace, preset)
+                            })
+                            .collect()
                     })
                     .collect::<Result<_, OrphosError>>()?;
                 candidates.extend(scored.into_iter().flatten());
@@ -824,32 +830,34 @@ const MIN_NODES_FOR_PARALLEL_PRESETS: usize = 4096;
 /// Bytes of node copies in use.
 static NODE_COPY_BYTES: AtomicUsize = AtomicUsize::new(0);
 
-/// The right to hold `count` copies of the nodes of a sequence at once,
-/// each scored by one thread; given back when dropped.
+/// The right to hold `count` copies of the nodes of a sequence at once;
+/// given back when dropped.
 ///
 /// The presets of a sequence are independent of each other once the first
 /// has been scored, but each scoring writes to every node, so presets
-/// scored at the same time need a copy of the nodes each. The copies of a
-/// genome's nodes are tens of megabytes each, hence the budget.
+/// scored at the same time need nodes of their own: one thread scores on
+/// the nodes themselves, every other on a copy. The copies of a genome's
+/// nodes are tens of megabytes each, hence the budget.
 struct NodeCopies {
     count: usize,
     bytes: usize,
 }
 
 impl NodeCopies {
-    /// Reserves up to one copy of `nodes` per thread and per preset in
-    /// `preset_count`, as the budget allows; none if `nodes` are few.
+    /// Reserves the copies of `nodes` that scoring `preset_count` presets
+    /// on every thread takes, or as many as the budget allows; none if
+    /// `nodes` are few.
     fn reserve(preset_count: usize, nodes: &[Node]) -> Self {
         let none = Self { count: 0, bytes: 0 };
-        let wanted = preset_count.min(rayon::current_num_threads());
-        if wanted < 2 || nodes.len() < MIN_NODES_FOR_PARALLEL_PRESETS {
+        let workers = preset_count.min(rayon::current_num_threads());
+        if workers < 2 || nodes.len() < MIN_NODES_FOR_PARALLEL_PRESETS {
             return none;
         }
         let bytes_per_copy = std::mem::size_of_val(nodes);
         let mut in_use = NODE_COPY_BYTES.load(Ordering::Relaxed);
         loop {
-            let count = wanted.min(NODE_COPY_BUDGET.saturating_sub(in_use) / bytes_per_copy);
-            if count < 2 {
+            let count = (workers - 1).min(NODE_COPY_BUDGET.saturating_sub(in_use) / bytes_per_copy);
+            if count == 0 {
                 return none;
             }
             let bytes = count * bytes_per_copy;
@@ -1172,7 +1180,16 @@ impl OrphosAnalyzer {
 
     /// [`Self::analyze_sequence_bytes`] for the sequence number
     /// `sequence_number` of its input, counted from 1.
-    fn analyze_numbered_sequence(
+    ///
+    /// For callers that read the sequences of an input one at a time rather
+    /// than hand them all to [`Self::analyze_sequences`]: the number becomes
+    /// the `seqnum` of the sequence in GFF output and the first part of the
+    /// identifier of its genes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::analyze_sequence_bytes`].
+    pub fn analyze_numbered_sequence(
         &self,
         sequence: &[u8],
         header: String,
@@ -1668,13 +1685,8 @@ mod tests {
     /// orientations, far enough apart to give training something to choose
     /// between.
     fn create_gene_rich_sequence(seed: u64, length: usize) -> Vec<u8> {
-        let mut state = seed;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(seed);
+        let mut next = || random.next();
         let complement = |base: u8| match base {
             b'A' => b'T',
             b'C' => b'G',

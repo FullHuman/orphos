@@ -831,4 +831,70 @@ mod tests {
         // Should complete without panicking
         // Function completion indicates success
     }
+
+    /// The first stage of start training counts the windows upstream of a
+    /// start codon in two ways: from the motif site of the node, for every
+    /// start node, and from the sequence, for the starts it selects.
+    #[test]
+    fn test_motif_site_counts_the_windows_count_motif_counts() {
+        use crate::node::motif_site;
+        use crate::sequence::encoded::EncodedSequence;
+
+        let mut random = crate::test_random::XorShift(0x2B99_2DDF_A232_49D6);
+        let length = 120;
+        let bases: Vec<u8> = (0..length)
+            .map(|_| b"ACGT"[(random.next() % 4) as usize])
+            .collect();
+        let encoded = EncodedSequence::without_masking(&bases);
+        let motif = Motif {
+            length: 4,
+            ..Motif::default()
+        };
+
+        // Start codons at every distance from the start of each strand,
+        // including those with only some of their windows in the sequence.
+        for strand in [Strand::Forward, Strand::Reverse] {
+            for index in 0..length {
+                let node = Node {
+                    position: NodePosition {
+                        index,
+                        strand,
+                        codon_type: CodonType::Atg,
+                        stop_value: 0,
+                        is_edge: false,
+                    },
+                    ..Node::default()
+                };
+                let site = motif_site(
+                    &encoded.forward_sequence,
+                    &encoded.reverse_complement_sequence,
+                    length,
+                    &node,
+                );
+                let mut from_site = Box::new([[[0.0; 4096]; 4]; 4]);
+                site.count_windows(&mut from_site);
+
+                let (strand_sequence, strand_position) = match strand {
+                    Strand::Forward => (&encoded.forward_sequence, index),
+                    _ => (&encoded.reverse_complement_sequence, length - 1 - index),
+                };
+                let mut from_sequence = Box::new([[[0.0; 4096]; 4]; 4]);
+                let mut no_motif = 0.0;
+                count_motif(
+                    &mut from_sequence,
+                    &mut no_motif,
+                    &motif,
+                    strand_sequence,
+                    strand_position,
+                    0,
+                );
+
+                assert!(
+                    from_site == from_sequence,
+                    "{strand:?} strand, index {index}"
+                );
+                assert_eq!(no_motif, 0.0);
+            }
+        }
+    }
 }

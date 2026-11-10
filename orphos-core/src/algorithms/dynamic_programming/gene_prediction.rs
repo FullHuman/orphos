@@ -749,6 +749,7 @@ fn setup_forward_pointers(nodes: &mut [Node], start_index: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_random::XorShift;
     use crate::types::{CodonType, NodeMotifInfo, NodePosition, NodeScores, NodeState};
 
     fn create_test_node(
@@ -772,14 +773,6 @@ mod tests {
         }
     }
 
-    fn dp_nodes_of(nodes: &[Node]) -> Vec<DpNode> {
-        let training = create_test_training();
-        nodes
-            .iter()
-            .map(|node| DpNode::from_node(node, &training))
-            .collect()
-    }
-
     fn create_test_training() -> Training {
         Training {
             gc_content: 0.5,
@@ -797,29 +790,11 @@ mod tests {
         }
     }
 
-    /// Deterministic pseudo-random numbers for the reference comparison.
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn next(&mut self) -> u64 {
-            self.0 = self
-                .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            self.0 >> 33
-        }
-
-        /// A value in `[low, high)`.
-        fn float(&mut self, low: f64, high: f64) -> f64 {
-            low + (high - low) * (self.next() % 1_000_000) as f64 / 1_000_000.0
-        }
-    }
-
     /// A sequence whose stretches differ in GC content: stop codons are rare
     /// in the GC-rich ones, which gives long, overlapping open reading
     /// frames on both strands, some of them longer than the node window.
     fn mixed_gc_sequence(seed: u64, length: usize) -> Vec<u8> {
-        let mut random = Lcg(seed);
+        let mut random = XorShift(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let mut sequence = Vec::with_capacity(length);
         while sequence.len() < length {
             let gc_percent = [45, 60, 75, 90][(random.next() % 4) as usize];
@@ -866,7 +841,7 @@ mod tests {
         add_nodes(&encoded, &mut nodes, false, circular, training).unwrap();
         sort_nodes_by_position(&mut nodes);
 
-        let mut random = Lcg(seed ^ 0x9e37_79b9);
+        let mut random = XorShift((seed ^ 0x9e37_79b9).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         for node in nodes.iter_mut() {
             if node.position.codon_type == CodonType::Stop {
                 continue;
@@ -1135,7 +1110,7 @@ mod tests {
         nodes[1].scores.total_score = 5.0;
         nodes[2].scores.total_score = 10.0;
 
-        let max_idx = find_maximum_terminal_node(&dp_nodes_of(&nodes));
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(2)); // Should pick the highest scoring terminal
     }
 
@@ -1151,7 +1126,7 @@ mod tests {
         nodes[1].scores.total_score = 8.0;
         nodes[2].scores.total_score = 12.0;
 
-        let max_idx = find_maximum_terminal_node(&dp_nodes_of(&nodes));
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(2)); // Should pick the highest scoring reverse start
     }
 
@@ -1162,7 +1137,7 @@ mod tests {
             create_test_node(200, Strand::Reverse, CodonType::Stop, 100, false),
         ];
 
-        let max_idx = find_maximum_terminal_node(&dp_nodes_of(&nodes));
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert!(max_idx.is_none());
     }
 
@@ -1176,7 +1151,7 @@ mod tests {
         nodes[0].scores.total_score = -5.0;
         nodes[1].scores.total_score = -10.0;
 
-        let max_idx = find_maximum_terminal_node(&dp_nodes_of(&nodes));
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(0)); // Should pick the least negative
     }
 

@@ -552,13 +552,8 @@ mod tests {
 
     #[test]
     fn test_calc_most_gc_frame_matches_reference() {
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x9E37_79B9_7F4A_7C15_u64);
+        let mut next = || random.next();
         for length in [
             3usize, 4, 5, 59, 60, 61, 119, 120, 121, 122, 123, 500, 1001, 4096,
         ] {
@@ -578,13 +573,8 @@ mod tests {
 
     #[test]
     fn frame_plot_totals_tally_like_plot_values() {
-        let mut state = 0xD1B5_4A32_D192_ED03_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0xD1B5_4A32_D192_ED03_u64);
+        let mut next = || random.next();
         for length in [0usize, 1, 2, 3, 4, 5, 61, 300, 301, 302] {
             let bases: Vec<u8> = (0..length)
                 .map(|_| b"ACGT"[(next() % 4) as usize])

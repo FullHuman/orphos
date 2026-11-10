@@ -1774,13 +1774,8 @@ mod tests {
     #[test]
     fn edge_stops_find_the_edge_neighbours_a_walk_finds() {
         let params = ScoringParams::from_training(&create_test_training());
-        let mut state = 0xA076_1D64_78BD_642F_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0xA076_1D64_78BD_642F_u64);
+        let mut next = || random.next();
 
         // Fewer nodes than the search window, exactly as many, and enough
         // for the middle nodes to search neither end.

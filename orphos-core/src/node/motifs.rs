@@ -712,13 +712,8 @@ mod tests {
     fn motif_site_search_matches_the_window_by_window_search() {
         use crate::sequence::encoded::EncodedSequence;
 
-        let mut state = 0x94D0_49BB_1331_11EB_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x94D0_49BB_1331_11EB_u64);
+        let mut next = || random.next();
         let length = 257;
         let bases: Vec<u8> = (0..length)
             .map(|_| b"ACGT"[(next() % 4) as usize])
@@ -761,13 +756,8 @@ mod tests {
 
     #[test]
     fn rbs_lookup_matches_the_searches_for_every_kmer() {
-        let mut state = 0x853C_49E6_748F_EA9B_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x853C_49E6_748F_EA9B_u64);
+        let mut next = || random.next();
         let mut weight_sets = vec![[0.0f64; 28], [1.0f64; 28]];
         for _ in 0..3 {
             let mut weights = [0.0f64; 28];

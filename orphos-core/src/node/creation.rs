@@ -57,12 +57,14 @@ impl StrandProcessingContext {
             self.minimum_distances[i % READING_FRAMES] = MINIMUM_EDGE_GENE_LENGTH; // Uses i%3 for min_dist
 
             if !self.closed && self.sequence_length > 0 {
-                while self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES] + 2
-                    > self.sequence_length - 1
-                {
-                    self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES] = self
-                        .last_stop_positions[(i + sequence_length_mod) % READING_FRAMES]
-                        .saturating_sub(3);
+                // Back to the last codon that fits in the sequence. A
+                // sequence of one or two bases holds none: the position
+                // stops at zero, where Prodigal's goes below it.
+                let last_base = self.sequence_length - 1;
+                let last_stop =
+                    &mut self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES];
+                while *last_stop + 2 > last_base && *last_stop > 0 {
+                    *last_stop = last_stop.saturating_sub(3);
                 }
             }
         }
@@ -1063,13 +1065,8 @@ mod tests {
     /// Deterministic sequences for the scan comparisons: mostly random
     /// bases, rich in G and C, with some runs of `N`.
     fn pseudo_random_sequence(seed: u64, length: usize) -> Vec<u8> {
-        let mut state = seed;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(seed);
+        let mut next = || random.next();
         let mut sequence = Vec::with_capacity(length);
         while sequence.len() < length {
             if next() % 400 == 0 {
@@ -1203,6 +1200,21 @@ mod tests {
                     format!("{actual:?}"),
                     "seed {seed}, closed {closed}, circular {circular}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_add_nodes_sequence_shorter_than_a_codon() {
+        let training = create_test_training();
+        for sequence in [&b""[..], b"A", b"AC"] {
+            let encoded_sequence = create_test_encoded_sequence(sequence);
+            for (closed, circular) in [(false, false), (true, false), (false, true)] {
+                let mut nodes = vec![Node::default()];
+                let count =
+                    add_nodes(&encoded_sequence, &mut nodes, closed, circular, &training).unwrap();
+                assert_eq!(count, 0);
+                assert!(nodes.is_empty());
             }
         }
     }

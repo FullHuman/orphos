@@ -12,8 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OrphosAnalyzer::analyze_sequences` analyzes the records of one input in
   order, numbering them; `analyze_fasta_file` and the Python and
   WebAssembly bindings go through it.
+- `OrphosAnalyzer::analyze_numbered_sequence` analyzes one sequence under a
+  given number, for callers that read an input one sequence at a time.
 - `SequenceInfo::number`, the number of a sequence in its input, counted
   from 1. Code that builds a `SequenceInfo` has to set it.
+- `output::write_all_results` writes the results of the sequences of one
+  input as one output; the command line and the bindings use it.
 
 ### Fixed
 
@@ -24,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This shows in GFF output and in the name column of BED output. Output for
   a single sequence is unchanged.
 - GFF output of several sequences has one `##gff-version` line, at the top,
-  instead of one per sequence.
+  instead of one per sequence (`write_all_results`; `write_results` still
+  writes one sequence as a complete output).
+- A sequence of one or two bases no longer hangs node creation when ends
+  are open, as they are by default.
 - With `-m`, a run of `N` that lasts to the end of a sequence is not masked,
   as in Prodigal, which records a run when it reads the base after it;
   genes reaching into such a run were dropped.

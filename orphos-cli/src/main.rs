@@ -56,7 +56,7 @@
 
 use clap::{Arg, ArgAction, Command};
 use orphos_core::config::{OrphosConfig, OutputFormat};
-use orphos_core::output::write_results;
+use orphos_core::output::write_all_results;
 use orphos_core::*;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -215,9 +215,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(BufWriter::new(io::stdout()))
     };
 
-    for result in &results {
-        write_results(&mut writer, result, orphos.config.output_format)?;
-    }
+    write_all_results(&mut writer, &results, orphos.config.output_format)?;
 
     if !matches.get_flag("quiet") {
         eprintln!(

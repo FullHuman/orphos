@@ -497,13 +497,8 @@ mod tests {
 
     #[test]
     fn test_accumulators_match_reference() {
-        let mut state = 0x2545_F491_4F6C_DD1D_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x2545_F491_4F6C_DD1D_u64);
+        let mut next = || random.next();
         for length in [1usize, 2, 3, 4, 7, 8, 9, 10, 30, 31, 32, 64, 65, 200] {
             let bases: Vec<u8> = (0..length)
                 .map(|_| b"ACGT"[(next() % 4) as usize])

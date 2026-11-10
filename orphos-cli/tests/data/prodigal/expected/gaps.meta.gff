@@ -65,3 +65,7 @@ scaffold_7	Prodigal_v2.6.3	CDS	2342	3187	42.5	-	0	ID=7_3;partial=00;start_type=A
 scaffold_7	Prodigal_v2.6.3	CDS	3188	4129	63.3	-	0	ID=7_4;partial=00;start_type=ATG;rbs_motif=GGAGG;rbs_spacer=5-10bp;gc_cont=0.448;conf=100.00;score=64.22;cscore=43.93;sscore=20.29;rscore=12.44;uscore=2.96;tscore=3.99;
 scaffold_7	Prodigal_v2.6.3	CDS	4165	5466	112.0	-	0	ID=7_5;partial=00;start_type=ATG;rbs_motif=GGA/GAG/AGG;rbs_spacer=5-10bp;gc_cont=0.443;conf=100.00;score=112.90;cscore=107.00;sscore=5.90;rscore=3.02;uscore=-2.05;tscore=3.99;
 scaffold_7	Prodigal_v2.6.3	CDS	5497	6681	96.8	-	0	ID=7_6;partial=00;start_type=ATG;rbs_motif=GGAG/GAGG;rbs_spacer=5-10bp;gc_cont=0.478;conf=100.00;score=96.83;cscore=85.96;sscore=10.87;rscore=11.01;uscore=-4.12;tscore=3.99;
+# Sequence Data: seqnum=8;seqlen=2;seqhdr="scaffold_8 two bases"
+# Model Data: version=Prodigal.v2.6.3;run_type=Metagenomic;model="5|Anaplasma_marginale_Maries|B|49.8|11|1";gc_cont=49.80;transl_table=11;uses_sd=1
+# Sequence Data: seqnum=9;seqlen=1;seqhdr="scaffold_9 one base"
+# Model Data: version=Prodigal.v2.6.3;run_type=Metagenomic;model="13|Catenulispora_acidiphila_DSM_44928|B|69.8|11|1";gc_cont=69.80;transl_table=11;uses_sd=1

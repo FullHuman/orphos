@@ -560,13 +560,8 @@ mod tests {
         use crate::sequence::encoded::EncodedSequence;
         use crate::sequence::{GcFramePlot, calc_most_gc_frame};
 
-        let mut state = 0x2545_F491_4F6C_DD1D_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x2545_F491_4F6C_DD1D_u64);
+        let mut next = || random.next();
         // Lengths of every residue modulo 3: the bases after the last whole
         // triplet have no frame, and nodes near the end read them.
         for (length, circular) in [

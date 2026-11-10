@@ -9,11 +9,22 @@ pub fn write_gff_format<W: Write>(
     writer: &mut W,
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
-    // One file holds the sequences of one input: the version line opens it,
-    // ahead of the first sequence, as in Prodigal.
-    if results.sequence_info.number <= 1 {
-        writeln!(writer, "##gff-version  3")?;
-    }
+    write_gff_version(writer)?;
+    write_gff_sequence(writer, results)
+}
+
+/// Write the line that opens a GFF file.
+pub fn write_gff_version<W: Write>(writer: &mut W) -> Result<(), OrphosError> {
+    writeln!(writer, "##gff-version  3")?;
+    Ok(())
+}
+
+/// Write the part of a GFF file that belongs to one sequence: its header
+/// lines and its genes.
+pub fn write_gff_sequence<W: Write>(
+    writer: &mut W,
+    results: &OrphosResults,
+) -> Result<(), OrphosError> {
     // Add header comments like original Orphos
     if let Some(desc) = &results.sequence_info.description {
         writeln!(

@@ -5,7 +5,7 @@ use std::io::Cursor;
 
 use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
-use orphos_core::output::write_results;
+use orphos_core::output::write_all_results;
 
 type FastaSequence = (String, Option<String>, Vec<u8>);
 
@@ -244,10 +244,8 @@ fn analyze_sequence(fasta_content: &str, options: Option<OrphosOptions>) -> PyRe
 
     // Generate output
     let mut output = Vec::new();
-    for result in &all_results {
-        write_results(&mut output, result, analyzer.config.output_format)
-            .map_err(|e| PyIOError::new_err(format!("Output error: {}", e)))?;
-    }
+    write_all_results(&mut output, &all_results, analyzer.config.output_format)
+        .map_err(|e| PyIOError::new_err(format!("Output error: {}", e)))?;
 
     let output_str = String::from_utf8(output)
         .map_err(|e| PyValueError::new_err(format!("UTF-8 conversion error: {}", e)))?;

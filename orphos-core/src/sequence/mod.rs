@@ -1040,13 +1040,8 @@ mod tests {
 
     #[test]
     fn test_codon_index_matches_calculate_kmer_index() {
-        let mut state = 0x1234_5678_9ABC_DEF1_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut random = crate::test_random::XorShift(0x1234_5678_9ABC_DEF1_u64);
+        let mut next = || random.next();
         // Sequences ending at every offset within a byte: the last codon
         // may or may not reach into a following byte.
         for length in [3usize, 4, 5, 6, 7, 8, 41, 42, 43, 44] {

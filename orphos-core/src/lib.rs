@@ -105,6 +105,8 @@ pub mod output;
 mod parallel;
 pub mod results;
 pub mod sequence;
+#[cfg(test)]
+mod test_random;
 pub mod training;
 pub mod types;
 

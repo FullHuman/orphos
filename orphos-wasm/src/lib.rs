@@ -1,6 +1,6 @@
 use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
-use orphos_core::output::write_results;
+use orphos_core::output::write_all_results;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use wasm_bindgen::prelude::*;
@@ -139,10 +139,8 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
 
     // Generate output
     let mut output = Vec::new();
-    for result in &all_results {
-        write_results(&mut output, result, analyzer.config.output_format)
-            .map_err(|e| JsValue::from_str(&format!("Output error: {}", e)))?;
-    }
+    write_all_results(&mut output, &all_results, analyzer.config.output_format)
+        .map_err(|e| JsValue::from_str(&format!("Output error: {}", e)))?;
 
     let output_str =
         String::from_utf8(output).map_err(|e| JsValue::from_str(&format!("UTF-8 error: {}", e)))?;
