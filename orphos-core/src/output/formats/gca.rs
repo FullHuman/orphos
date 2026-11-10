@@ -48,6 +48,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test_seq".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
@@ -63,7 +64,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -80,6 +81,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test_seq".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
@@ -95,7 +97,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -112,6 +114,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "multi_gene_seq".to_string(),
                 length: 2000,
                 description: Some("Test sequence with multiple genes".to_string()),
@@ -147,7 +150,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -167,6 +170,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "empty_seq".to_string(),
                 length: 100,
                 description: Some("Empty sequence".to_string()),
@@ -174,7 +178,7 @@ mod tests {
                 num_genes: 0,
             },
             genes: vec![],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -191,6 +195,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "unknown_strand".to_string(),
                 length: 500,
                 description: Some("Test sequence with unknown strand".to_string()),
@@ -206,7 +211,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -223,6 +228,7 @@ mod tests {
 
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "wrapped_seq".to_string(),
                 length: 1000,
                 description: None,
@@ -238,7 +244,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 

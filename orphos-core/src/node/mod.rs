@@ -16,14 +16,19 @@ mod utilities;
 mod validation;
 
 pub use creation::add_nodes;
+pub(crate) use creation::add_sorted_nodes;
 pub use dicodon::calculate_dicodon_gene;
 pub use management::*;
+pub(crate) use motifs::{MotifSite, RbsLookup, motif_site, motif_sites};
 pub use motifs::{find_best_upstream_motif, rbs_score};
 pub use overlaps::{
     IntergenicNode, intergenic_mod, intergenic_mod_values, record_overlapping_starts,
 };
 pub use record_gc_bias::record_gc_bias;
+pub(crate) use record_gc_bias::record_gc_bias_of;
+pub(crate) use scoring::{Given, LengthFactors, score_nodes_given};
 pub use scoring::{raw_coding_score, score_nodes, score_nodes_with_orf_gc};
+pub(crate) use utilities::reset_nodes_keeping_coding_scores;
 pub use utilities::{reset_node_scores, reset_nodes_to_pristine, sort_nodes_by_position};
 
 #[cfg(test)]

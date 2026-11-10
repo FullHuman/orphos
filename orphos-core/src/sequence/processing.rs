@@ -10,68 +10,173 @@ use crate::constants::{
 /// frame within half a sliding window on either side (`|q - p| <= 57` for the
 /// 120 bp window), and assigns each triplet the frame with the highest count.
 pub fn calc_most_gc_frame(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
-    if sequence_length < READING_FRAMES {
-        return vec![-1; sequence_length];
-    }
-
-    let total_gc_counts = calculate_window_gc_counts(sequence, sequence_length);
-
-    assign_gc_rich_frames(&total_gc_counts, sequence_length)
-}
-
-/// Per position, the number of G/C bases in the same frame at most
-/// `SLIDING_WINDOW_SIZE / 2 - READING_FRAMES` bases away.
-fn calculate_window_gc_counts(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
-    let half_window = SLIDING_WINDOW_SIZE / 2;
-    let reach = half_window - READING_FRAMES;
-    let is_gc_at: Vec<i32> = (0..sequence_length)
-        .map(|position| i32::from(is_gc(sequence, position)))
-        .collect();
-
-    let mut counts = vec![0; sequence_length];
-    for position in 0..sequence_length {
-        let mut count = if position < READING_FRAMES {
-            // Start of the frame: count the bases at or after `position`.
-            (position..=(position + reach).min(sequence_length - 1))
-                .step_by(READING_FRAMES)
-                .map(|q| is_gc_at[q])
-                .sum()
-        } else {
-            counts[position - READING_FRAMES]
-        };
-        if position >= READING_FRAMES {
-            // Slide the window by one codon within the frame.
-            if position + reach < sequence_length {
-                count += is_gc_at[position + reach];
-            }
-            if position >= half_window {
-                count -= is_gc_at[position - half_window];
-            }
-        }
-        counts[position] = count;
-    }
-
-    counts
-}
-
-fn assign_gc_rich_frames(total_gc_counts: &[i32], sequence_length: usize) -> Vec<i32> {
+    let plot = GcFramePlot::new(sequence, sequence_length);
     let mut gc_rich_frames = vec![-1; sequence_length];
+    for (triplet, frames) in gc_rich_frames.chunks_exact_mut(READING_FRAMES).enumerate() {
+        frames.fill(plot.triplet_frame(triplet));
+    }
+    gc_rich_frames
+}
 
-    for triplet_start in (0..sequence_length.saturating_sub(2)).step_by(READING_FRAMES) {
-        let counts = [
-            total_gc_counts[triplet_start],
-            total_gc_counts.get(triplet_start + 1).copied().unwrap_or(0),
-            total_gc_counts.get(triplet_start + 2).copied().unwrap_or(0),
-        ];
+/// The GC frame plot of a sequence ([`calc_most_gc_frame`]), stored as
+/// running totals so that the plot values of any run of codons can be
+/// tallied without visiting them.
+///
+/// The three positions of a triplet (`3t`, `3t + 1`, `3t + 2`) share the
+/// triplet's most GC-rich frame, and the one or two bases left over at the
+/// end of the sequence have none (`-1`). So the plot is one frame per whole
+/// triplet, kept as, for every `t`, the number of triplets before `t` whose
+/// frame is 1 and the number whose frame is 2.
+#[derive(Debug)]
+pub struct GcFramePlot {
+    /// `totals[t]`: among the first `t` whole triplets, how many have frame
+    /// 1 and how many have frame 2 (the others have frame 0).
+    totals: Vec<[u32; 2]>,
+    sequence_length: usize,
+}
 
-        let max_gc_frame = find_max_reading_frame(counts[0], counts[1], counts[2]) as i32;
+impl GcFramePlot {
+    /// Computes the plot of the first `sequence_length` bases of the encoded
+    /// `sequence`.
+    #[must_use]
+    pub fn new(sequence: &[u8], sequence_length: usize) -> Self {
+        let whole_triplets = sequence_length / READING_FRAMES;
+        // In triplets: the window reaches 19 triplets ahead of a position
+        // and, once it is 20 triplets into the sequence, 19 behind it.
+        let half_window = SLIDING_WINDOW_SIZE / 2 / READING_FRAMES;
+        let reach = half_window - 1;
 
-        for frame_offset in 0..READING_FRAMES.min(sequence_length - triplet_start) {
-            gc_rich_frames[triplet_start + frame_offset] = max_gc_frame;
+        // G/C flags of the three bases of a codon, one flag per byte, so
+        // that the windowed G/C counts of the three frames can be kept in
+        // one integer and updated with one addition per triplet entering or
+        // leaving the window. A count is at most 39.
+        let mut codon_flags = [0u32; 64];
+        for (codon, flags) in codon_flags.iter_mut().enumerate() {
+            for frame in 0..READING_FRAMES {
+                let base = (codon >> (2 * frame)) & 0b11;
+                if base == usize::from(ENCODED_G) || base == usize::from(ENCODED_C) {
+                    *flags |= 1 << (8 * frame);
+                }
+            }
+        }
+        let triplet_flags = |triplet: usize| -> u32 {
+            let first = triplet * READING_FRAMES;
+            if first + READING_FRAMES <= sequence_length {
+                codon_flags[codon_index(sequence, first)]
+            } else {
+                // A partial triplet, or none, at the end of the sequence.
+                (first..sequence_length)
+                    .map(|position| {
+                        u32::from(is_gc(sequence, position)) << (8 * (position - first))
+                    })
+                    .sum()
+            }
+        };
+
+        let mut totals = Vec::with_capacity(whole_triplets + 1);
+        let mut total = [0u32; 2];
+        totals.push(total);
+        let mut counts: u32 = (0..=reach).map(triplet_flags).sum();
+        for triplet in 0..whole_triplets {
+            if triplet > 0 {
+                counts += triplet_flags(triplet + reach);
+                if triplet >= half_window {
+                    counts -= triplet_flags(triplet - half_window);
+                }
+            }
+            let frame = find_max_reading_frame(
+                (counts & 0xFF) as i32,
+                ((counts >> 8) & 0xFF) as i32,
+                ((counts >> 16) & 0xFF) as i32,
+            );
+            total[0] += u32::from(frame == 1);
+            total[1] += u32::from(frame == 2);
+            totals.push(total);
+        }
+
+        Self {
+            totals,
+            sequence_length,
         }
     }
 
-    gc_rich_frames
+    /// Number of whole triplets in the sequence.
+    #[inline]
+    fn whole_triplets(&self) -> usize {
+        self.totals.len() - 1
+    }
+
+    /// Most GC-rich frame of the whole triplet `triplet`.
+    #[inline]
+    fn triplet_frame(&self, triplet: usize) -> i32 {
+        let [before_1, before_2] = self.totals[triplet];
+        let [after_1, after_2] = self.totals[triplet + 1];
+        if after_1 != before_1 {
+            1
+        } else if after_2 != before_2 {
+            2
+        } else {
+            0
+        }
+    }
+}
+
+/// The values of a GC frame plot at runs of positions three bases apart, as
+/// the GC bias record tallies them.
+pub trait FramePlot {
+    /// Whether the plot covers no position at all.
+    fn is_empty(&self) -> bool;
+
+    /// For each of the positions `first`, `first + 3`, ... (`count` of them)
+    /// that the plot covers, adds one to `tally[bin(value)]`, `value` being
+    /// the plot value at the position.
+    fn tally(&self, first: usize, count: usize, bin: impl Fn(i32) -> usize, tally: &mut [i32; 3]);
+}
+
+impl FramePlot for [i32] {
+    fn is_empty(&self) -> bool {
+        <[i32]>::is_empty(self)
+    }
+
+    fn tally(&self, first: usize, count: usize, bin: impl Fn(i32) -> usize, tally: &mut [i32; 3]) {
+        for position in (first..self.len()).step_by(READING_FRAMES).take(count) {
+            tally[bin(self[position])] += 1;
+        }
+    }
+}
+
+impl FramePlot for GcFramePlot {
+    fn is_empty(&self) -> bool {
+        self.sequence_length == 0
+    }
+
+    fn tally(&self, first: usize, count: usize, bin: impl Fn(i32) -> usize, tally: &mut [i32; 3]) {
+        if count == 0 {
+            return;
+        }
+        // The positions are one per triplet, from the triplet of `first` on.
+        let whole_triplets = self.whole_triplets();
+        let low = first / READING_FRAMES;
+        let high = low + count;
+        let whole_high = high.min(whole_triplets);
+        if low < whole_high {
+            let [before_1, before_2] = self.totals[low];
+            let [after_1, after_2] = self.totals[whole_high];
+            let frame_1 = after_1 - before_1;
+            let frame_2 = after_2 - before_2;
+            let frame_0 = (whole_high - low) as u32 - frame_1 - frame_2;
+            tally[bin(0)] += frame_0 as i32;
+            tally[bin(1)] += frame_1 as i32;
+            tally[bin(2)] += frame_2 as i32;
+        }
+        // The bases after the last whole triplet have no frame.
+        if low <= whole_triplets
+            && whole_triplets < high
+            && whole_triplets * READING_FRAMES + first % READING_FRAMES < self.sequence_length
+        {
+            tally[bin(-1)] += 1;
+        }
+    }
 }
 
 /// Find exact Shine-Dalgarno motifs
@@ -82,32 +187,51 @@ pub fn shine_dalgarno_exact(
     start_codon_position: usize,
     ribosome_weights: &[f64],
 ) -> usize {
-    if start_codon_position <= search_position + MIN_DISTANCE_FROM_START {
-        return 0;
-    }
-
-    let search_limit =
-        MAX_MOTIF_LENGTH.min(start_codon_position - MIN_DISTANCE_FROM_START - search_position);
-    let base_scores = calculate_exact_base_scores(sequence, search_position, search_limit);
-
-    find_best_exact_motif(
-        &base_scores,
-        search_limit,
-        search_position,
+    shine_dalgarno_exact_from(
+        sequence,
+        search_position as isize,
         start_codon_position,
         ribosome_weights,
     )
 }
 
+/// [`shine_dalgarno_exact`] for a search position that may lie before the
+/// start of the sequence. The bases before the sequence match nothing.
+///
+/// Prodigal searches from such positions for the starts of the reverse
+/// strand that are within twenty bases of the end of the sequence.
+#[must_use]
+pub(crate) fn shine_dalgarno_exact_from(
+    sequence: &[u8],
+    search_position: isize,
+    start_codon_position: usize,
+    ribosome_weights: &[f64],
+) -> usize {
+    let start_distance = start_codon_position as isize - search_position;
+    if start_distance <= MIN_DISTANCE_FROM_START as isize {
+        return 0;
+    }
+    let start_distance = start_distance as usize;
+
+    let search_limit = MAX_MOTIF_LENGTH.min(start_distance - MIN_DISTANCE_FROM_START);
+    let base_scores = calculate_exact_base_scores(sequence, search_position, search_limit);
+
+    find_best_exact_motif(&base_scores, search_limit, start_distance, ribosome_weights)
+}
+
 fn calculate_exact_base_scores(
     sequence: &[u8],
-    search_position: usize,
+    search_position: isize,
     search_limit: usize,
 ) -> [f64; MAX_MOTIF_LENGTH] {
     let mut base_scores = [0.0; MAX_MOTIF_LENGTH];
 
     for (pattern_index, score) in base_scores.iter_mut().take(search_limit).enumerate() {
-        let sequence_position = search_position + pattern_index;
+        let Ok(sequence_position) = usize::try_from(search_position + pattern_index as isize)
+        else {
+            *score = -10.0;
+            continue;
+        };
         *score = match pattern_index % 3 {
             0 if is_a(sequence, sequence_position) => 2.0,
             1 | 2 if is_g(sequence, sequence_position) => 3.0,
@@ -121,8 +245,7 @@ fn calculate_exact_base_scores(
 fn find_best_exact_motif(
     base_scores: &[f64],
     search_limit: usize,
-    search_position: usize,
-    start_codon_position: usize,
+    start_distance: usize,
     ribosome_weights: &[f64],
 ) -> usize {
     let mut score_prefix = [0.0; MAX_MOTIF_LENGTH + 1];
@@ -135,7 +258,6 @@ fn find_best_exact_motif(
     }
 
     let mut best_motif_index = 0;
-    let start_distance = start_codon_position - search_position;
 
     for motif_length in (MIN_MOTIF_LENGTH..=search_limit).rev() {
         for motif_start_offset in 0..=(search_limit - motif_length) {
@@ -175,32 +297,51 @@ pub fn shine_dalgarno_mm(
     start_codon_position: usize,
     ribosome_weights: &[f64],
 ) -> usize {
-    if start_codon_position <= search_position + MIN_DISTANCE_FROM_START {
-        return 0;
-    }
-
-    let search_limit =
-        MAX_MOTIF_LENGTH.min(start_codon_position - MIN_DISTANCE_FROM_START - search_position);
-    let base_scores = calculate_mismatch_base_scores(sequence, search_position, search_limit);
-
-    find_best_mismatch_motif(
-        &base_scores,
-        search_limit,
-        search_position,
+    shine_dalgarno_mm_from(
+        sequence,
+        search_position as isize,
         start_codon_position,
         ribosome_weights,
     )
 }
 
+/// [`shine_dalgarno_mm`] for a search position that may lie before the
+/// start of the sequence. The bases before the sequence match nothing.
+///
+/// Prodigal searches from such positions for the starts of the reverse
+/// strand that are within twenty bases of the end of the sequence.
+#[must_use]
+pub(crate) fn shine_dalgarno_mm_from(
+    sequence: &[u8],
+    search_position: isize,
+    start_codon_position: usize,
+    ribosome_weights: &[f64],
+) -> usize {
+    let start_distance = start_codon_position as isize - search_position;
+    if start_distance <= MIN_DISTANCE_FROM_START as isize {
+        return 0;
+    }
+    let start_distance = start_distance as usize;
+
+    let search_limit = MAX_MOTIF_LENGTH.min(start_distance - MIN_DISTANCE_FROM_START);
+    let base_scores = calculate_mismatch_base_scores(sequence, search_position, search_limit);
+
+    find_best_mismatch_motif(&base_scores, search_limit, start_distance, ribosome_weights)
+}
+
 fn calculate_mismatch_base_scores(
     sequence: &[u8],
-    search_position: usize,
+    search_position: isize,
     search_limit: usize,
 ) -> [f64; MAX_MOTIF_LENGTH] {
     let mut base_scores = [0.0; MAX_MOTIF_LENGTH];
 
     for (pattern_index, score) in base_scores.iter_mut().take(search_limit).enumerate() {
-        let sequence_position = search_position + pattern_index;
+        let Ok(sequence_position) = usize::try_from(search_position + pattern_index as isize)
+        else {
+            *score = -10.0;
+            continue;
+        };
         *score = match pattern_index % 3 {
             0 if is_a(sequence, sequence_position) => 2.0,
             0 => -3.0,
@@ -215,8 +356,7 @@ fn calculate_mismatch_base_scores(
 fn find_best_mismatch_motif(
     base_scores: &[f64],
     search_limit: usize,
-    search_position: usize,
-    start_codon_position: usize,
+    start_distance: usize,
     ribosome_weights: &[f64],
 ) -> usize {
     let mut score_prefix = [0.0; MAX_MOTIF_LENGTH + 1];
@@ -229,7 +369,6 @@ fn find_best_mismatch_motif(
     }
 
     let mut best_motif_index = 0;
-    let start_distance = start_codon_position - search_position;
 
     for motif_length in (5..=search_limit).rev() {
         for motif_start_offset in 0..=(search_limit - motif_length) {
@@ -351,6 +490,26 @@ mod tests {
     use super::*;
     use crate::sequence::encoded::EncodedSequence;
 
+    fn assign_gc_rich_frames(total_gc_counts: &[i32], sequence_length: usize) -> Vec<i32> {
+        let mut gc_rich_frames = vec![-1; sequence_length];
+
+        for triplet_start in (0..sequence_length.saturating_sub(2)).step_by(READING_FRAMES) {
+            let counts = [
+                total_gc_counts[triplet_start],
+                total_gc_counts.get(triplet_start + 1).copied().unwrap_or(0),
+                total_gc_counts.get(triplet_start + 2).copied().unwrap_or(0),
+            ];
+
+            let max_gc_frame = find_max_reading_frame(counts[0], counts[1], counts[2]) as i32;
+
+            for frame_offset in 0..READING_FRAMES.min(sequence_length - triplet_start) {
+                gc_rich_frames[triplet_start + frame_offset] = max_gc_frame;
+            }
+        }
+
+        gc_rich_frames
+    }
+
     /// Reference implementation of the GC frame plot with explicit forward,
     /// backward and windowed counts, as previously implemented.
     fn calc_most_gc_frame_reference(sequence: &[u8], sequence_length: usize) -> Vec<i32> {
@@ -413,6 +572,41 @@ mod tests {
                     calc_most_gc_frame_reference(&encoded.forward_sequence, length),
                     "length {length}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn frame_plot_totals_tally_like_plot_values() {
+        let mut state = 0xD1B5_4A32_D192_ED03_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for length in [0usize, 1, 2, 3, 4, 5, 61, 300, 301, 302] {
+            let bases: Vec<u8> = (0..length)
+                .map(|_| b"ACGT"[(next() % 4) as usize])
+                .collect();
+            let encoded = EncodedSequence::without_masking(&bases);
+            let values = calc_most_gc_frame(&encoded.forward_sequence, length);
+            let totals = GcFramePlot::new(&encoded.forward_sequence, length);
+            assert_eq!(FramePlot::is_empty(values.as_slice()), totals.is_empty());
+
+            // Runs that start anywhere and reach up to and past the end.
+            for first in 0..length + 4 {
+                for count in [0, 1, 2, 7, 50, 200] {
+                    let bin = |value: i32| (value + 4).rem_euclid(3) as usize;
+                    let mut from_values = [0; 3];
+                    values.as_slice().tally(first, count, bin, &mut from_values);
+                    let mut from_totals = [0; 3];
+                    totals.tally(first, count, bin, &mut from_totals);
+                    assert_eq!(
+                        from_values, from_totals,
+                        "length {length}, first {first}, count {count}"
+                    );
+                }
             }
         }
     }

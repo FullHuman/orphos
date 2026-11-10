@@ -9,19 +9,28 @@ pub fn write_gff_format<W: Write>(
     writer: &mut W,
     results: &OrphosResults,
 ) -> Result<(), OrphosError> {
-    writeln!(writer, "##gff-version  3")?;
+    // One file holds the sequences of one input: the version line opens it,
+    // ahead of the first sequence, as in Prodigal.
+    if results.sequence_info.number <= 1 {
+        writeln!(writer, "##gff-version  3")?;
+    }
     // Add header comments like original Orphos
     if let Some(desc) = &results.sequence_info.description {
         writeln!(
             writer,
-            "# Sequence Data: seqnum=1;seqlen={};seqhdr=\"{} {}\"",
-            results.sequence_info.length, results.sequence_info.header, desc
+            "# Sequence Data: seqnum={};seqlen={};seqhdr=\"{} {}\"",
+            results.sequence_info.number,
+            results.sequence_info.length,
+            results.sequence_info.header,
+            desc
         )?;
     } else {
         writeln!(
             writer,
-            "# Sequence Data: seqnum=1;seqlen={};seqhdr=\"{}\"",
-            results.sequence_info.length, results.sequence_info.header
+            "# Sequence Data: seqnum={};seqlen={};seqhdr=\"{}\"",
+            results.sequence_info.number,
+            results.sequence_info.length,
+            results.sequence_info.header
         )?;
     }
     writeln!(
@@ -109,6 +118,7 @@ mod tests {
 
     fn create_test_results() -> OrphosResults {
         let sequence_info = SequenceInfo {
+            number: 1,
             header: "test_sequence".to_string(),
             description: Some("Test sequence for unit tests".to_string()),
             length: 1000,
@@ -180,7 +190,7 @@ mod tests {
 
         OrphosResults {
             sequence_info,
-            training_used: training,
+            training_used: training.into(),
             genes: vec![gene1, gene2],
             metagenomic_model: None,
         }
@@ -276,7 +286,7 @@ mod tests {
     #[test]
     fn test_gff_no_shine_dalgarno() {
         let mut results = create_test_results();
-        results.training_used.uses_shine_dalgarno = false;
+        std::sync::Arc::make_mut(&mut results.training_used).uses_shine_dalgarno = false;
         let mut output = Vec::new();
 
         write_gff_format(&mut output, &results).unwrap();

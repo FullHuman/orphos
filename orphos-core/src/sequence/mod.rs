@@ -457,6 +457,26 @@ pub fn calculate_kmer_index(kmer_length: usize, encoded_sequence: &[u8], positio
     kmer_index
 }
 
+/// Index of the codon at `position`: [`calculate_kmer_index`] for three
+/// bases, read from the two bytes that hold them instead of base by base.
+#[must_use]
+#[inline]
+pub(crate) fn codon_index(encoded_sequence: &[u8], position: usize) -> usize {
+    let bit_index = position * 2;
+    let byte_index = bit_index >> 3;
+    let low = usize::from(encoded_sequence[byte_index]);
+    // The codon reaches into the next byte only when it does not start in
+    // the first two bases of this one; past the buffer there is nothing to
+    // read then.
+    let high = usize::from(
+        encoded_sequence
+            .get(byte_index + 1)
+            .copied()
+            .unwrap_or_default(),
+    );
+    ((low | (high << 8)) >> (bit_index & 0x07)) & 0x3F
+}
+
 /// Calculate background k-mer frequencies for both strands
 ///
 /// Computes frequency distributions of k-mers across the entire sequence,
@@ -624,16 +644,8 @@ pub fn encode_sequence(
         }
     }
 
-    // Handle final mask if sequence ends with N's
-    if do_mask
-        && let Some(start) = mask_start
-        && sequence.len() - start >= MASK_SIZE
-    {
-        masks.push(Mask {
-            begin: start,
-            end: sequence.len() - 1,
-        });
-    }
+    // A run of N's that lasts to the end of the sequence is not a mask:
+    // Prodigal records a run when it reads the base that ends it.
 
     let gc_content = if total_count > 0 {
         f64::from(gc_count) / f64::from(total_count)
@@ -652,10 +664,13 @@ pub fn find_n_runs(sequence: &[u8]) -> Vec<Mask> {
     let mut position = 0;
     while let Some(offset) = sequence[position..].iter().position(|&base| is_n(base)) {
         let begin = position + offset;
-        let end = sequence[begin..]
-            .iter()
-            .position(|&base| !is_n(base))
-            .map_or(sequence.len(), |length| begin + length);
+        // Prodigal records a run when it reads the base that ends it, so a
+        // run that lasts to the end of the sequence is never recorded and
+        // genes may reach into it.
+        let Some(length) = sequence[begin..].iter().position(|&base| !is_n(base)) else {
+            break;
+        };
+        let end = begin + length;
         if end - begin >= MASK_SIZE {
             masks.push(Mask {
                 begin,
@@ -1021,6 +1036,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_codon_index_matches_calculate_kmer_index() {
+        let mut state = 0x1234_5678_9ABC_DEF1_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // Sequences ending at every offset within a byte: the last codon
+        // may or may not reach into a following byte.
+        for length in [3usize, 4, 5, 6, 7, 8, 41, 42, 43, 44] {
+            let bases: Vec<u8> = (0..length)
+                .map(|_| b"ACGT"[(next() % 4) as usize])
+                .collect();
+            let mut encoded = vec![0u8; (length * 2).div_ceil(8)];
+            let mut unknown = vec![0u8; length.div_ceil(8)];
+            encode_sequence_simd_wide_packed(&bases, &mut encoded, &mut unknown).unwrap();
+            for position in 0..=length - 3 {
+                assert_eq!(
+                    codon_index(&encoded, position),
+                    calculate_kmer_index(3, &encoded, position),
+                    "length {length}, position {position}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_n_runs_leaves_out_a_run_at_the_end() {
+        let run = |length: usize| "N".repeat(length);
+        // A run of 50 or more is masked wherever a base follows it.
+        let sequence = format!("{}ACGT{}ACGT{}AC{}", run(60), run(49), run(50), run(80));
+        let masks = find_n_runs(sequence.as_bytes());
+        let spans: Vec<(usize, usize)> = masks.iter().map(|mask| (mask.begin, mask.end)).collect();
+        assert_eq!(spans, vec![(0, 59), (117, 166)]);
+
+        // Prodigal never closes a run that lasts to the end of the sequence.
+        assert!(find_n_runs(run(300).as_bytes()).is_empty());
+        assert!(find_n_runs(format!("ACGT{}", run(75)).as_bytes()).is_empty());
     }
 
     #[test]

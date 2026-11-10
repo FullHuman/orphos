@@ -11,31 +11,97 @@ use crate::{
     types::{CodonType, Node, Training},
 };
 
-/// Train start codon recognition using Shine-Dalgarno motifs
-/// The node fields read by [`train_starts_sd`].
+/// The node fields read by [`train_starts_sd`], packed so that the nodes of
+/// a strand are scanned in a few megabytes: every training iteration scans
+/// them all.
 #[derive(Debug, Clone, Copy)]
 struct SdNode {
-    index: usize,
     coding_score: f64,
-    ribosome_binding_sites: [usize; 2],
-    codon_type_index: usize,
+    /// The two ribosome binding site motifs of the node, as one index into
+    /// [`RbsChoices`].
+    rbs_pair: u16,
+    codon_type_index: u8,
+    frame: u8,
     is_stop: bool,
     is_edge: bool,
 }
 
 impl From<&Node> for SdNode {
     fn from(node: &Node) -> Self {
+        let [exact, mismatch] = node.motif_info.ribosome_binding_sites;
+        assert!(
+            exact < NUM_RBS_WEIGHTS && mismatch < NUM_RBS_WEIGHTS,
+            "ribosome binding site motif out of range"
+        );
         Self {
-            index: node.position.index,
             coding_score: node.scores.coding_score,
-            ribosome_binding_sites: node.motif_info.ribosome_binding_sites,
-            codon_type_index: node.position.codon_type.to_index(),
+            rbs_pair: (exact * NUM_RBS_WEIGHTS + mismatch) as u16,
+            codon_type_index: node.position.codon_type.to_index() as u8,
+            frame: (node.position.index % NUM_CODON_TYPES) as u8,
             is_stop: node.position.codon_type == CodonType::Stop,
             is_edge: node.position.is_edge,
         }
     }
 }
 
+/// The nodes of one strand, in node order.
+struct SdStrand {
+    nodes: Vec<SdNode>,
+    /// Sequence position of each node.
+    positions: Vec<usize>,
+}
+
+impl SdStrand {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            positions: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn push(&mut self, node: &Node) {
+        self.nodes.push(SdNode::from(node));
+        self.positions.push(node.position.index);
+    }
+}
+
+/// For every pair of ribosome binding site motifs a node can have (exact
+/// match, match with one mismatch), the motif an iteration's weights choose
+/// and its weight.
+struct RbsChoices {
+    site: [u8; NUM_RBS_WEIGHTS * NUM_RBS_WEIGHTS],
+    weight: [f64; NUM_RBS_WEIGHTS * NUM_RBS_WEIGHTS],
+}
+
+impl RbsChoices {
+    fn new(rbs_weights: &[f64; NUM_RBS_WEIGHTS]) -> Self {
+        let mut choices = Self {
+            site: [0; NUM_RBS_WEIGHTS * NUM_RBS_WEIGHTS],
+            weight: [0.0; NUM_RBS_WEIGHTS * NUM_RBS_WEIGHTS],
+        };
+        for exact in 0..NUM_RBS_WEIGHTS {
+            for mismatch in 0..NUM_RBS_WEIGHTS {
+                let site = if rbs_weights[exact] > rbs_weights[mismatch] + RBS_WEIGHT_THRESHOLD_HIGH
+                    || mismatch == 0
+                {
+                    exact
+                } else if rbs_weights[exact] < rbs_weights[mismatch] - RBS_WEIGHT_THRESHOLD_HIGH
+                    || exact == 0
+                {
+                    mismatch
+                } else {
+                    exact.max(mismatch)
+                };
+                let pair = exact * NUM_RBS_WEIGHTS + mismatch;
+                choices.site[pair] = site as u8;
+                choices.weight[pair] = rbs_weights[site];
+            }
+        }
+        choices
+    }
+}
+
+/// Train start codon recognition using Shine-Dalgarno motifs
 pub fn train_starts_sd(
     sequence: &[u8],
     reverse_sequence: &[u8],
@@ -47,16 +113,16 @@ pub fn train_starts_sd(
     // copies keep the repeated scans cache friendly, one per strand since
     // every scan is of one strand. (`add_nodes` gives every node a strand.)
     let node_count = nodes.len();
-    let mut forward_nodes = Vec::with_capacity(node_count / 2 + 1);
-    let mut reverse_nodes = Vec::with_capacity(node_count / 2 + 1);
+    let mut forward_nodes = SdStrand::with_capacity(node_count / 2 + 1);
+    let mut reverse_nodes = SdStrand::with_capacity(node_count / 2 + 1);
     for node in nodes {
         match node.position.strand {
-            Strand::Forward => forward_nodes.push(SdNode::from(node)),
-            Strand::Reverse => reverse_nodes.push(SdNode::from(node)),
+            Strand::Forward => forward_nodes.push(node),
+            Strand::Reverse => reverse_nodes.push(node),
             Strand::Unknown => {}
         }
     }
-    let all_nodes = || forward_nodes.iter().chain(&reverse_nodes);
+    let all_nodes = || forward_nodes.nodes.iter().chain(&reverse_nodes.nodes);
     let weight_factor = training.start_weight_factor;
     let mut type_background = [0.0; NUM_CODON_TYPES];
     let mut ribosome_binding_site_background = [0.0; NUM_RBS_WEIGHTS];
@@ -70,7 +136,7 @@ pub fn train_starts_sd(
         if node.is_stop {
             continue;
         }
-        type_background[node.codon_type_index] += 1.0;
+        type_background[usize::from(node.codon_type_index)] += 1.0;
         total_sum += 1.0;
     }
 
@@ -83,40 +149,9 @@ pub fn train_starts_sd(
     let mut score_threshold = INITIAL_SCORE_THRESHOLD;
 
     for iteration in 0..MAX_TRAINING_ITERATIONS_SD {
-        ribosome_binding_site_background.fill(0.0);
-        let mut ribosome_binding_site_background_sum = 0.0;
-
-        for node in all_nodes() {
-            if node.is_stop || node.is_edge {
-                continue;
-            }
-
-            let max_ribosome_binding_site = if training.rbs_weights[node.ribosome_binding_sites[0]]
-                > training.rbs_weights[node.ribosome_binding_sites[1]] + RBS_WEIGHT_THRESHOLD_HIGH
-                || node.ribosome_binding_sites[1] == 0
-            {
-                node.ribosome_binding_sites[0]
-            } else if training.rbs_weights[node.ribosome_binding_sites[0]]
-                < training.rbs_weights[node.ribosome_binding_sites[1]] - RBS_WEIGHT_THRESHOLD_HIGH
-                || node.ribosome_binding_sites[0] == 0
-            {
-                node.ribosome_binding_sites[1]
-            } else {
-                node.ribosome_binding_sites[0].max(node.ribosome_binding_sites[1])
-            };
-
-            ribosome_binding_site_background[max_ribosome_binding_site] += 1.0;
-            ribosome_binding_site_background_sum += 1.0;
-        }
-
-        if ribosome_binding_site_background_sum > 0.0 {
-            for weight in ribosome_binding_site_background
-                .iter_mut()
-                .take(NUM_RBS_WEIGHTS)
-            {
-                *weight /= ribosome_binding_site_background_sum;
-            }
-        }
+        // The motif a node counts for depends on the weights of the
+        // previous iteration and on its pair of motifs only.
+        let rbs_choices = RbsChoices::new(&training.rbs_weights);
 
         // The two strands are scanned on two threads. Every count is a whole
         // number, so adding the strands' counts gives exactly what one scan
@@ -130,6 +165,7 @@ pub fn train_starts_sd(
                     sequence,
                     sequence_length,
                     training,
+                    &rbs_choices,
                     weight_factor,
                     score_threshold,
                     count_upstream,
@@ -142,12 +178,32 @@ pub fn train_starts_sd(
                     reverse_sequence,
                     sequence_length,
                     training,
+                    &rbs_choices,
                     weight_factor,
                     score_threshold,
                     count_upstream,
                 )
             },
         );
+
+        // Background: the motif of every start node that is not an edge.
+        for (total, (forward_count, reverse_count)) in ribosome_binding_site_background
+            .iter_mut()
+            .zip(forward.rbs_background.iter().zip(&reverse.rbs_background))
+        {
+            *total = forward_count + reverse_count;
+        }
+        let ribosome_binding_site_background_sum =
+            forward.rbs_background_sum + reverse.rbs_background_sum;
+        if ribosome_binding_site_background_sum > 0.0 {
+            for weight in ribosome_binding_site_background
+                .iter_mut()
+                .take(NUM_RBS_WEIGHTS)
+            {
+                *weight /= ribosome_binding_site_background_sum;
+            }
+        }
+
         let mut ribosome_binding_site_real = [0.0; NUM_RBS_WEIGHTS];
         for (total, (forward_count, reverse_count)) in ribosome_binding_site_real
             .iter_mut()
@@ -288,29 +344,38 @@ pub fn train_starts_sd(
 
 /// What one scan of a strand counts in an iteration of [`train_starts_sd`].
 struct StrandCounts {
+    /// The motif of every start node that is not an edge.
+    rbs_background: [f64; NUM_RBS_WEIGHTS],
+    /// The number of those nodes.
+    rbs_background_sum: f64,
     rbs_real: [f64; NUM_RBS_WEIGHTS],
     type_real: [f64; NUM_CODON_TYPES],
     upstream_composition: [[f64; NUM_BASES]; UPSTREAM_POSITIONS],
 }
 
-/// One iteration's scan of `nodes`, the nodes of `strand`: for every frame,
-/// the best start in the ORF ending at each stop is counted, with its RBS
-/// motif and start codon type, when its score reaches `score_threshold`;
+/// One iteration's scan of `strand_nodes`, the nodes of `strand`: for every
+/// frame, the best start in the ORF ending at each stop is counted, with its
+/// RBS motif and start codon type, when its score reaches `score_threshold`;
 /// with `count_upstream`, the bases upstream of those starts are counted
-/// too. The forward strand is scanned from the first node, the reverse
-/// strand from the last.
+/// too. The motif of every start that is not an edge is counted as
+/// background. The forward strand is scanned from the first node, the
+/// reverse strand from the last.
 #[allow(clippy::too_many_arguments)]
 fn scan_strand(
-    nodes: &[SdNode],
+    strand_nodes: &SdStrand,
     strand: Strand,
     sequence: &[u8],
     sequence_length: usize,
     training: &Training,
+    rbs_choices: &RbsChoices,
     weight_factor: f64,
     score_threshold: f64,
     count_upstream: bool,
 ) -> StrandCounts {
+    let nodes = strand_nodes.nodes.as_slice();
     let mut counts = StrandCounts {
+        rbs_background: [0.0; NUM_RBS_WEIGHTS],
+        rbs_background_sum: 0.0,
         rbs_real: [0.0; NUM_RBS_WEIGHTS],
         type_real: [0.0; NUM_CODON_TYPES],
         upstream_composition: [[0.0; NUM_BASES]; UPSTREAM_POSITIONS],
@@ -325,12 +390,12 @@ fn scan_strand(
             return;
         }
 
-        let frame = node.index % NUM_CODON_TYPES;
+        let frame = usize::from(node.frame);
 
         if node.is_stop {
             if best_scores[frame] >= score_threshold && best_node_indices[frame].is_some() {
                 let best_index = best_node_indices[frame].unwrap();
-                if best_index < nodes.len() && nodes[best_index].index % NUM_CODON_TYPES == frame {
+                if best_index < nodes.len() && usize::from(nodes[best_index].frame) == frame {
                     counts.rbs_real[ribosome_binding_sites[frame]] += 1.0;
                     counts.type_real[codon_types[frame]] += 1.0;
 
@@ -339,7 +404,7 @@ fn scan_strand(
                             sequence,
                             sequence_length,
                             strand,
-                            nodes[best_index].index,
+                            strand_nodes.positions[best_index],
                             &mut counts.upstream_composition,
                         );
                     }
@@ -351,34 +416,23 @@ fn scan_strand(
             ribosome_binding_sites[frame] = 0;
             codon_types[frame] = 0;
         } else {
-            let max_ribosome_binding_site = if training.rbs_weights[node.ribosome_binding_sites[0]]
-                > training.rbs_weights[node.ribosome_binding_sites[1]] + RBS_WEIGHT_THRESHOLD_HIGH
-                || node.ribosome_binding_sites[1] == 0
-            {
-                node.ribosome_binding_sites[0]
-            } else if training.rbs_weights[node.ribosome_binding_sites[0]]
-                < training.rbs_weights[node.ribosome_binding_sites[1]] - RBS_WEIGHT_THRESHOLD_HIGH
-                || node.ribosome_binding_sites[0] == 0
-            {
-                node.ribosome_binding_sites[1]
-            } else {
-                node.ribosome_binding_sites[0].max(node.ribosome_binding_sites[1])
-            };
+            let rbs_pair = usize::from(node.rbs_pair);
+            let max_ribosome_binding_site = usize::from(rbs_choices.site[rbs_pair]);
+            let codon_type_index = usize::from(node.codon_type_index);
+            counts.rbs_background[max_ribosome_binding_site] += 1.0;
+            counts.rbs_background_sum += 1.0;
 
             // `cscore + wt*rbs_wt + wt*type_wt` with the two fused
             // multiply-adds of the reference build.
             let score = weight_factor.mul_add(
-                training.start_type_weights[node.codon_type_index],
-                weight_factor.mul_add(
-                    training.rbs_weights[max_ribosome_binding_site],
-                    node.coding_score,
-                ),
+                training.start_type_weights[codon_type_index],
+                weight_factor.mul_add(rbs_choices.weight[rbs_pair], node.coding_score),
             );
 
             if score >= best_scores[frame] {
                 best_scores[frame] = score;
                 best_node_indices[frame] = Some(node_index);
-                codon_types[frame] = node.codon_type_index;
+                codon_types[frame] = codon_type_index;
                 ribosome_binding_sites[frame] = max_ribosome_binding_site;
             }
         }

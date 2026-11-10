@@ -1,8 +1,8 @@
 use bio::bio_types::strand::Strand;
 
 use crate::{
-    constants::{DICODON_SIZE, MAX_LOG_LIKELIHOOD, MIN_LOG_LIKELIHOOD, NUM_DICODONS},
-    sequence::{calculate_background_mer_frequencies, calculate_kmer_index},
+    constants::{CODON_LENGTH, DICODON_SIZE, MAX_LOG_LIKELIHOOD, MIN_LOG_LIKELIHOOD, NUM_DICODONS},
+    sequence::{calculate_background_mer_frequencies, codon_index},
     types::{CodonType, Node, NodeSliceExtension, Training},
 };
 
@@ -95,13 +95,22 @@ fn count_dicodons_in_gene(
     counts: &mut [u32; NUM_DICODONS],
     total_dicodons: &mut u32,
 ) {
-    for i in (gene_start..gene_end).step_by(3) {
-        if i + DICODON_SIZE > gene_end {
+    if gene_start + DICODON_SIZE > gene_end {
+        return;
+    }
+    // A dicodon is two codons, and its second is the first of the dicodon
+    // three bases on, so every codon of the gene is read once.
+    let mut position = gene_start;
+    let mut first_codon = codon_index(sequence, position);
+    loop {
+        let second_codon = codon_index(sequence, position + CODON_LENGTH);
+        counts[first_codon | (second_codon << (2 * CODON_LENGTH))] += 1;
+        *total_dicodons += 1;
+        position += CODON_LENGTH;
+        if position + DICODON_SIZE > gene_end {
             break;
         }
-        let mer_idx = calculate_kmer_index(DICODON_SIZE, sequence, i);
-        counts[mer_idx] += 1;
-        *total_dicodons += 1;
+        first_codon = second_codon;
     }
 }
 

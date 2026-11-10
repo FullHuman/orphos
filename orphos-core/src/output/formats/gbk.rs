@@ -55,13 +55,14 @@ mod tests {
         let results = OrphosResults {
             genes: vec![],
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test_seq".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
                 gc_content: 12.0,
                 num_genes: 25,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -88,13 +89,14 @@ mod tests {
         let results = OrphosResults {
             genes: vec![gene],
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "sequence1".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
                 gc_content: 12.0,
                 num_genes: 25,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -141,13 +143,14 @@ mod tests {
         let results = OrphosResults {
             genes,
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "multi_gene_seq".to_string(),
                 length: 500,
                 description: Some("Test sequence".to_string()),
                 gc_content: 12.0,
                 num_genes: 25,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -181,13 +184,14 @@ mod tests {
         let results = OrphosResults {
             genes: vec![gene],
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "seq_with-special.chars".to_string(),
                 length: 100,
                 description: Some("Test sequence".to_string()),
                 gc_content: 12.0,
                 num_genes: 25,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -223,13 +227,14 @@ mod tests {
         let results = OrphosResults {
             genes: vec![gene],
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test".to_string(),
                 length: 20,
                 description: Some("Test sequence".to_string()),
                 gc_content: 12.0,
                 num_genes: 25,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -258,13 +263,14 @@ mod tests {
         let results = OrphosResults {
             genes: vec![gene],
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "circular_seq".to_string(),
                 length: 1000,
                 description: None,
                 gc_content: 12.0,
                 num_genes: 1,
             },
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 

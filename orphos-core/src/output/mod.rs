@@ -122,6 +122,7 @@ mod tests {
     fn create_test_results() -> OrphosResults {
         OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test_seq".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
@@ -141,7 +142,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         }
     }
@@ -245,6 +246,7 @@ mod tests {
     fn test_write_results_empty_genes() {
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "empty_seq".to_string(),
                 length: 100,
                 description: None,
@@ -252,7 +254,7 @@ mod tests {
                 num_genes: 0,
             },
             genes: vec![],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 

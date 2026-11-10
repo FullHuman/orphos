@@ -36,16 +36,65 @@ pub fn calc_orf_gc(encoded_sequence: &[u8], sequence_length: usize, nodes: &mut 
     );
 }
 
-/// `counts[p]` is the number of G/C bases before position `p`.
-fn gc_prefix_counts(encoded_sequence: &[u8], sequence_length: usize) -> Vec<u32> {
-    let mut counts = Vec::with_capacity(sequence_length + 1);
-    let mut total = 0u32;
-    counts.push(total);
-    for position in 0..sequence_length {
-        total += u32::from(is_gc(encoded_sequence, position));
-        counts.push(total);
+/// The number of G/C bases before any position of a sequence.
+///
+/// One running count is kept per block of 32 bases (eight bytes of the
+/// encoded sequence); the bases between the block boundary and a position
+/// are counted from the encoded sequence itself, where a base is G or C
+/// when the two bits of its code differ.
+struct GcPrefix<'a> {
+    encoded_sequence: &'a [u8],
+    /// `blocks[b]` is the number of G/C bases before position `32 * b`.
+    blocks: Vec<u32>,
+}
+
+/// Bases per block of [`GcPrefix`].
+const GC_BLOCK_BASES: usize = 32;
+/// Bytes of encoded sequence per block of [`GcPrefix`].
+const GC_BLOCK_BYTES: usize = GC_BLOCK_BASES / 4;
+/// The low bit of every base of a block.
+const GC_BLOCK_BASE_BITS: u64 = 0x5555_5555_5555_5555;
+
+impl GcPrefix<'_> {
+    /// One bit per G/C base of the block of bases starting at byte
+    /// `first_byte`; bases past the end of the buffer read as `A`.
+    #[inline]
+    fn gc_bits(&self, first_byte: usize) -> u64 {
+        let bytes = &self.encoded_sequence[first_byte.min(self.encoded_sequence.len())..];
+        let word = match bytes.first_chunk::<{ GC_BLOCK_BYTES }>() {
+            Some(block) => u64::from_le_bytes(*block),
+            None => {
+                let mut block = [0u8; GC_BLOCK_BYTES];
+                block[..bytes.len()].copy_from_slice(bytes);
+                u64::from_le_bytes(block)
+            }
+        };
+        (word ^ (word >> 1)) & GC_BLOCK_BASE_BITS
     }
-    counts
+
+    /// The number of G/C bases before `position`.
+    #[inline]
+    fn before(&self, position: usize) -> u32 {
+        let block = position / GC_BLOCK_BASES;
+        let bases = position % GC_BLOCK_BASES;
+        let in_block = self.gc_bits(block * GC_BLOCK_BYTES) & ((1u64 << (2 * bases)) - 1);
+        self.blocks[block] + in_block.count_ones()
+    }
+}
+
+/// The G/C counts of the prefixes of the first `sequence_length` bases of
+/// `encoded_sequence`.
+fn gc_prefix_counts(encoded_sequence: &[u8], sequence_length: usize) -> GcPrefix<'_> {
+    let mut prefix = GcPrefix {
+        encoded_sequence,
+        blocks: Vec::with_capacity(sequence_length / GC_BLOCK_BASES + 1),
+    };
+    let mut total = 0u32;
+    for block in 0..=sequence_length / GC_BLOCK_BASES {
+        prefix.blocks.push(total);
+        total += prefix.gc_bits(block * GC_BLOCK_BYTES).count_ones();
+    }
+    prefix
 }
 
 /// Walk the nodes of `strand`, from the end of the sequence for the forward
@@ -53,7 +102,7 @@ fn gc_prefix_counts(encoded_sequence: &[u8], sequence_length: usize) -> Vec<u32>
 /// content of every start node's ORF.
 fn process_strand(
     encoded_sequence: &[u8],
-    gc_prefix: &[u32],
+    gc_prefix: &GcPrefix,
     sequence_length: usize,
     nodes: &mut StrandNodes,
     strand: Strand,
@@ -109,7 +158,7 @@ fn update_stop_codon_gc(
 
 /// Account for the start node `node` and record the GC content of its ORF.
 fn update_start_codon_gc(
-    gc_prefix: &[u32],
+    gc_prefix: &GcPrefix,
     sequence_length: usize,
     node: &mut Node,
     gc: &mut [f64; 3],
@@ -201,13 +250,13 @@ fn calculate_codon_gc(
 /// `current_index`, i.e. of the bases in `[last_index - 3k, last_index)` for
 /// the `k` whole codons that fit. Counts are integers, so summing them in
 /// one step gives the same value as adding the codons one by one.
-fn accumulate_gc_forward(gc_prefix: &[u32], current_index: usize, last_index: usize) -> f64 {
+fn accumulate_gc_forward(gc_prefix: &GcPrefix, current_index: usize, last_index: usize) -> f64 {
     if last_index < 3 || last_index <= current_index {
         return 0.0;
     }
 
     let codons = (last_index - current_index) / 3;
-    f64::from(gc_prefix[last_index] - gc_prefix[last_index - 3 * codons])
+    f64::from(gc_prefix.before(last_index) - gc_prefix.before(last_index - 3 * codons))
 }
 
 /// G/C count of the codons `last_index + 3, last_index + 6, ...` up to
@@ -216,7 +265,7 @@ fn accumulate_gc_forward(gc_prefix: &[u32], current_index: usize, last_index: us
 /// runs past the end of the sequence contributes its existing bases, as in
 /// Prodigal, where the bases past the end read as `A`.
 fn accumulate_gc_reverse(
-    gc_prefix: &[u32],
+    gc_prefix: &GcPrefix,
     sequence_length: usize,
     current_index: usize,
     last_index: usize,
@@ -231,7 +280,7 @@ fn accumulate_gc_reverse(
     }
     let codons = (current_index - start) / 3 + 1;
     let end = (start + 3 * codons).min(sequence_length);
-    f64::from(gc_prefix[end] - gc_prefix[start])
+    f64::from(gc_prefix.before(end) - gc_prefix.before(start))
 }
 
 const fn calculate_orf_length(stop_value: isize, index: usize) -> f64 {

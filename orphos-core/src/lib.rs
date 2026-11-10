@@ -110,4 +110,4 @@ pub mod types;
 
 pub use engine::OrphosAnalyzer;
 
-use crate::{node::rbs_score, types::OrphosError};
+use crate::types::OrphosError;

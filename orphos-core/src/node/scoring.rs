@@ -8,12 +8,14 @@ use crate::{
         NEGATIVE_SCORE_PENALTY, NO_MOTIF_THRESHOLD, NODE_SEARCH_WINDOW, SHORT_GENE_THRESHOLD,
         UPSTREAM_COMPOSITION_WEIGHT, UPSTREAM_SCAN_RANGE, UPSTREAM_SKIP_END, UPSTREAM_SKIP_START,
     },
+    node::motifs::{MotifSite, RbsLookup, rbs_score_with},
     node::{calc_orf_gc, find_best_upstream_motif},
-    rbs_score,
     sequence::encoded::EncodedSequence,
-    sequence::{calculate_kmer_index, is_stop},
+    sequence::{calculate_kmer_index, codon_index, is_stop},
     types::{CodonType, Node, OrphosError, Training},
 };
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bio::bio_types::strand::Strand;
 
@@ -247,54 +249,83 @@ fn calculate_upstream_scores(
     }
 }
 
+/// The stop values of the edge nodes near the two ends of the node array,
+/// where a start node looks for an edge node of its own open reading frame.
+///
+/// A forward start among the first [`NODE_SEARCH_WINDOW`] nodes looks at the
+/// nodes before it, a reverse start among the last ones at the nodes after
+/// it. There are only a handful of edge nodes, so their stop values are
+/// kept aside instead of every such start walking over its neighbours.
+struct EdgeStops {
+    /// Stop values of the edge nodes among the nodes scored so far, while
+    /// those are among the first [`NODE_SEARCH_WINDOW`] nodes.
+    scored: Vec<isize>,
+    /// Index and stop value of the edge nodes among the last
+    /// [`NODE_SEARCH_WINDOW`] nodes, as they are before any is scored.
+    last: Vec<(usize, isize)>,
+}
+
+impl EdgeStops {
+    fn new(nodes: &[Node]) -> Self {
+        let first_of_last = nodes.len().saturating_sub(NODE_SEARCH_WINDOW);
+        Self {
+            scored: Vec::new(),
+            last: nodes[first_of_last..]
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.position.is_edge)
+                .map(|(offset, node)| (first_of_last + offset, node.position.stop_value))
+                .collect(),
+        }
+    }
+
+    /// Records node `index` once it is scored, or passed over.
+    #[inline]
+    fn scored(&mut self, index: usize, node: &Node) {
+        if index < NODE_SEARCH_WINDOW && node.position.is_edge {
+            self.scored.push(node.position.stop_value);
+        }
+    }
+}
+
 /// Apply edge upstream bonus based on neighboring nodes
 ///
 /// Searches for edge nodes with the same stop position within a limited window
 /// and applies bonus to the current node if found
 fn apply_edge_upstream_bonus_for_neighbors(
-    nodes: &mut [Node],
+    node: &mut Node,
     current_index: usize,
     node_count: usize,
     params: &ScoringParams,
     boundary_bonus_applied: bool,
+    edge_stops: &EdgeStops,
 ) {
-    let current_node = &nodes[current_index];
-
     // Prodigal applies the boundary bonus and the neighbour search as one
     // if/else-if chain, so a node that received the boundary bonus is never
     // searched.
-    if current_node.position.is_edge || boundary_bonus_applied {
+    if node.position.is_edge || boundary_bonus_applied {
         return;
     }
 
-    if current_index < NODE_SEARCH_WINDOW && current_node.position.strand == Strand::Forward {
-        // Forward strand: check previous nodes
-        for j in (0..current_index).rev() {
-            if nodes[j].position.is_edge
-                && current_node.position.stop_value == nodes[j].position.stop_value
-            {
-                nodes[current_index].scores.upstream_score = EDGE_UPSTREAM.mul_add(
-                    params.start_weight_factor,
-                    nodes[current_index].scores.upstream_score,
-                );
-                break;
-            }
-        }
-    } else if current_index >= node_count.saturating_sub(NODE_SEARCH_WINDOW)
-        && current_node.position.strand == Strand::Reverse
-    {
-        // Reverse strand: check following nodes
-        for j in (current_index + 1)..node_count {
-            if nodes[j].position.is_edge
-                && current_node.position.stop_value == nodes[j].position.stop_value
-            {
-                nodes[current_index].scores.upstream_score = EDGE_UPSTREAM.mul_add(
-                    params.start_weight_factor,
-                    nodes[current_index].scores.upstream_score,
-                );
-                break;
-            }
-        }
+    let stop_value = node.position.stop_value;
+    let has_edge_neighbour =
+        if current_index < NODE_SEARCH_WINDOW && node.position.strand == Strand::Forward {
+            // Forward strand: an edge node among the previous nodes
+            edge_stops.scored.contains(&stop_value)
+        } else if current_index >= node_count.saturating_sub(NODE_SEARCH_WINDOW)
+            && node.position.strand == Strand::Reverse
+        {
+            // Reverse strand: an edge node among the following nodes
+            edge_stops
+                .last
+                .iter()
+                .any(|&(index, edge_stop)| index > current_index && edge_stop == stop_value)
+        } else {
+            false
+        };
+    if has_edge_neighbour {
+        node.scores.upstream_score =
+            EDGE_UPSTREAM.mul_add(params.start_weight_factor, node.scores.upstream_score);
     }
 }
 
@@ -426,6 +457,30 @@ fn calculate_final_scores(node: &mut Node) {
     node.scores.total_score = node.scores.coding_score + node.scores.start_score;
 }
 
+/// What the caller of [`score_nodes_given`] has computed already.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Given<'a> {
+    /// The nodes hold their ORF GC content ([`calc_orf_gc`]).
+    pub orf_gc: bool,
+    /// The nodes hold the raw coding scores ([`raw_coding_score`]) of the
+    /// training. Training on a single genome computes them to train the
+    /// start model, and they depend on nothing start training changes.
+    pub coding_scores: bool,
+    /// The Shine-Dalgarno motif searches for the weights of the training,
+    /// tabulated. The table depends on the weights alone, so it is built
+    /// once for a model that scores many sequences.
+    pub rbs_lookup: Option<&'a RbsLookup>,
+    /// The length factors of the training ([`LengthFactors::for_training`]),
+    /// likewise shared by the sequences a model scores.
+    pub length_factors: Option<&'a LengthFactors>,
+    /// What the upstream motif searches read of the sequence, for every
+    /// node ([`motif_sites`]). It depends on the nodes and the sequence
+    /// alone, so it is read once for nodes that several models score.
+    ///
+    /// [`motif_sites`]: crate::node::motifs::motif_sites
+    pub motif_sites: Option<&'a [MotifSite]>,
+}
+
 /// Score nodes for gene finding
 pub fn score_nodes(
     encoded_sequence: &EncodedSequence,
@@ -434,7 +489,14 @@ pub fn score_nodes(
     closed: bool,
     is_meta: bool,
 ) -> Result<(), OrphosError> {
-    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, true)
+    score_nodes_given(
+        encoded_sequence,
+        nodes,
+        training,
+        closed,
+        is_meta,
+        Given::default(),
+    )
 }
 
 /// [`score_nodes`] for nodes whose ORF GC content ([`calc_orf_gc`]) has
@@ -450,16 +512,27 @@ pub fn score_nodes_with_orf_gc(
     closed: bool,
     is_meta: bool,
 ) -> Result<(), OrphosError> {
-    score_nodes_impl(encoded_sequence, nodes, training, closed, is_meta, false)
+    score_nodes_given(
+        encoded_sequence,
+        nodes,
+        training,
+        closed,
+        is_meta,
+        Given {
+            orf_gc: true,
+            ..Given::default()
+        },
+    )
 }
 
-fn score_nodes_impl(
+/// [`score_nodes`], skipping what `given` says the caller has computed.
+pub(crate) fn score_nodes_given(
     encoded_sequence: &EncodedSequence,
     nodes: &mut [Node],
     training: &Training,
     closed: bool,
     is_meta: bool,
-    compute_orf_gc: bool,
+    given: Given,
 ) -> Result<(), OrphosError> {
     let node_count = nodes.len();
 
@@ -472,31 +545,55 @@ fn score_nodes_impl(
     let context = ScoringContext::new(encoded_sequence, training, closed, is_meta);
     let params = ScoringParams::from_training(training);
 
-    if compute_orf_gc {
+    if !given.orf_gc {
         calc_orf_gc(
             &encoded_sequence.forward_sequence,
             encoded_sequence.sequence_length,
             nodes,
         );
     }
-    raw_coding_score_optimized(
-        &encoded_sequence.forward_sequence,
-        &encoded_sequence.reverse_complement_sequence,
-        encoded_sequence.sequence_length,
-        nodes,
-        training,
-        params.no_stop_probability,
-    );
-
-    // Calculate RBS scores using optimized approach
-    if training.uses_shine_dalgarno {
-        rbs_score(
+    if !given.coding_scores {
+        let own_length_factors;
+        let length_factors = match given.length_factors {
+            Some(length_factors) => length_factors,
+            None => {
+                own_length_factors = LengthFactors::new(params.no_stop_probability);
+                &own_length_factors
+            }
+        };
+        score_strands(
             &encoded_sequence.forward_sequence,
             &encoded_sequence.reverse_complement_sequence,
             encoded_sequence.sequence_length,
             nodes,
             training,
+            length_factors,
         );
+    }
+
+    // Calculate RBS scores using optimized approach
+    if training.uses_shine_dalgarno {
+        let tabulated;
+        let rbs_lookup = match given.rbs_lookup {
+            Some(rbs_lookup) => rbs_lookup,
+            None => {
+                tabulated = RbsLookup::new(&*training.rbs_weights);
+                &tabulated
+            }
+        };
+        rbs_score_with(
+            &encoded_sequence.forward_sequence,
+            &encoded_sequence.reverse_complement_sequence,
+            encoded_sequence.sequence_length,
+            nodes,
+            rbs_lookup,
+        );
+    } else if let Some(motif_sites) = given.motif_sites {
+        for (node, site) in nodes.iter_mut().zip(motif_sites) {
+            if node.position.codon_type != CodonType::Stop && !node.position.is_edge {
+                node.motif_info.best_motif = site.best_motif(training, 2);
+            }
+        }
     } else {
         // For non-SD mode, process motif finding with bounds checking
         for node in nodes.iter_mut() {
@@ -514,51 +611,49 @@ fn score_nodes_impl(
     }
 
     // Score each start node using extracted helper functions with cached calculations
-    for i in 0..node_count {
-        if nodes[i].position.codon_type == CodonType::Stop {
+    let mut edge_stops = EdgeStops::new(nodes);
+    for (i, node) in nodes.iter_mut().enumerate() {
+        if node.position.codon_type == CodonType::Stop {
+            edge_stops.scored(i, node);
             continue;
         }
 
         // Create cache for repetitive calculations
-        let cache = NodeCache::new(&nodes[i], &context);
+        let cache = NodeCache::new(node, &context);
 
         // Calculate edge gene status
-        let mut edge_gene = calculate_edge_gene_status(&nodes[i], &context);
+        let mut edge_gene = calculate_edge_gene_status(node, &context);
 
         // Calculate various score components
-        calculate_type_scores(&mut nodes[i], edge_gene, &params, training);
+        calculate_type_scores(node, edge_gene, &params, training);
 
-        calculate_rbs_scores(&mut nodes[i], training, &params);
+        calculate_rbs_scores(node, training, &params);
 
-        calculate_upstream_scores(&mut nodes[i], &context, &params, &cache);
+        calculate_upstream_scores(node, &context, &params, &cache);
 
         // Apply edge upstream bonus based on neighboring nodes
         let boundary_bonus_applied = !context.closed && cache.is_boundary_node;
         apply_edge_upstream_bonus_for_neighbors(
-            nodes,
+            node,
             i,
             node_count,
             &params,
             boundary_bonus_applied,
+            &edge_stops,
         );
 
         // Convert boundary nodes to edge genes if necessary
-        convert_boundary_nodes_to_edge_genes(
-            &mut nodes[i],
-            &context,
-            &mut edge_gene,
-            &params,
-            &cache,
-        );
+        convert_boundary_nodes_to_edge_genes(node, &context, &mut edge_gene, &params, &cache);
 
         // Calculate base start score before applying penalties
-        calculate_final_scores(&mut nodes[i]);
+        calculate_final_scores(node);
 
         // Apply penalties and bonuses (includes recalculating start score)
-        apply_penalties_and_bonuses(&mut nodes[i], edge_gene, &context, &params, &cache);
+        apply_penalties_and_bonuses(node, edge_gene, &context, &params, &cache);
 
         // Calculate final total score
-        nodes[i].scores.total_score = nodes[i].scores.coding_score + nodes[i].scores.start_score;
+        node.scores.total_score = node.scores.coding_score + node.scores.start_score;
+        edge_stops.scored(i, node);
     }
 
     Ok(())
@@ -672,7 +767,7 @@ fn strand_coding_scores(
     sequence_length: usize,
     strand: Strand,
     training: &Training,
-    no_stop_probability: f64,
+    length_factors: &LengthFactors,
     last_positions: &mut [usize; 3],
 ) {
     let mut frame_scores = [0.0; 3];
@@ -686,7 +781,7 @@ fn strand_coding_scores(
         last_positions,
     );
     process_strand_second_pass(nodes, strand, &mut frame_scores);
-    process_strand_third_pass(nodes, strand, no_stop_probability, &mut frame_scores);
+    process_strand_third_pass(nodes, strand, length_factors, &mut frame_scores);
 }
 
 /// Score the two strands with [`strand_coding_scores`], each on its own
@@ -703,7 +798,7 @@ fn score_strands(
     sequence_length: usize,
     nodes: &mut [Node],
     training: &Training,
-    no_stop_probability: f64,
+    length_factors: &LengthFactors,
 ) {
     let (mut forward, mut reverse) = split_by_strand(nodes);
     let mut last_positions = [0usize; 3];
@@ -714,7 +809,7 @@ fn score_strands(
             sequence_length,
             Strand::Forward,
             training,
-            no_stop_probability,
+            length_factors,
             &mut last_positions,
         );
         strand_coding_scores(
@@ -723,7 +818,7 @@ fn score_strands(
             sequence_length,
             Strand::Reverse,
             training,
-            no_stop_probability,
+            length_factors,
             &mut last_positions,
         );
     } else {
@@ -735,7 +830,7 @@ fn score_strands(
                     sequence_length,
                     Strand::Forward,
                     training,
-                    no_stop_probability,
+                    length_factors,
                     &mut last_positions,
                 )
             },
@@ -746,7 +841,7 @@ fn score_strands(
                     sequence_length,
                     Strand::Reverse,
                     training,
-                    no_stop_probability,
+                    length_factors,
                     &mut [0usize; 3],
                 )
             },
@@ -767,82 +862,81 @@ fn process_strand_first_pass(
     last_positions: &mut [usize; 3],
 ) {
     frame_scores.fill(0.0);
+    let dicodon_table: &[f64; 1 << (2 * DICODON_SIZE)] = &training.gene_dicodon_table;
 
+    // Walking an ORF codon by codon, every dicodon shares its second codon
+    // with the dicodon read three bases downstream, so only the new codon is
+    // read from the sequence. The running score lives in a local while an
+    // ORF is walked; the additions happen in the same order as ever.
     if strand == Strand::Forward {
         // Process forward strand in reverse order (from end to start)
         for node in nodes.iter_mut().rev() {
-            let frame_index = node.position.index % 3;
+            let index = node.position.index;
+            let frame_index = index % 3;
 
             if node.position.codon_type == CodonType::Stop {
-                last_positions[frame_index] = node.position.index;
+                last_positions[frame_index] = index;
                 frame_scores[frame_index] = 0.0;
             } else {
                 // Calculate dicodon scores from last stop to current start
-                if last_positions[frame_index] >= 3 {
-                    let mut j = last_positions[frame_index] - 3;
-                    let mut previous_mer = None;
+                let last = last_positions[frame_index];
+                if last >= index + 3 {
+                    let mut j = last - 3;
+                    let mut mer_idx = calculate_kmer_index(DICODON_SIZE, encoded_sequence, j);
+                    let mut score = frame_scores[frame_index];
                     loop {
-                        if j < node.position.index {
-                            break;
-                        }
-                        let mer_idx = next_dicodon_index(encoded_sequence, j, previous_mer);
-                        previous_mer = Some(mer_idx);
-                        let dicodon_score = training.gene_dicodon_table[mer_idx];
-                        frame_scores[frame_index] += dicodon_score;
-
-                        if j < 3 {
+                        score += dicodon_table[mer_idx & DICODON_INDEX_MASK];
+                        if j < index + 3 {
                             break;
                         }
                         j -= 3;
+                        mer_idx = codon_index(encoded_sequence, j)
+                            | ((mer_idx & CODON_INDEX_MASK) << (2 * CODON_LENGTH));
                     }
+                    frame_scores[frame_index] = score;
                 }
                 node.scores.coding_score = frame_scores[frame_index];
-                last_positions[frame_index] = node.position.index;
+                last_positions[frame_index] = index;
             }
         }
     } else {
         // Process reverse strand in forward order
         for node in nodes.iter_mut() {
-            let frame_index = node.position.index % 3;
+            let index = node.position.index;
+            let frame_index = index % 3;
 
             if node.position.codon_type == CodonType::Stop {
-                last_positions[frame_index] = node.position.index;
+                last_positions[frame_index] = index;
                 frame_scores[frame_index] = 0.0;
             } else {
                 // Calculate dicodon scores from last stop to current start
                 let mut j = last_positions[frame_index] + 3;
-                let mut previous_mer = None;
-                while j <= node.position.index {
-                    let reverse_seq_pos = sequence_length - j - 1;
-                    let mer_idx =
-                        next_dicodon_index(encoded_sequence, reverse_seq_pos, previous_mer);
-                    previous_mer = Some(mer_idx);
-                    let dicodon_score = training.gene_dicodon_table[mer_idx];
-                    frame_scores[frame_index] += dicodon_score;
-                    j += 3;
+                if j <= index {
+                    let mut reverse_seq_pos = sequence_length - j - 1;
+                    let mut mer_idx =
+                        calculate_kmer_index(DICODON_SIZE, encoded_sequence, reverse_seq_pos);
+                    let mut score = frame_scores[frame_index];
+                    loop {
+                        score += dicodon_table[mer_idx & DICODON_INDEX_MASK];
+                        j += 3;
+                        if j > index {
+                            break;
+                        }
+                        reverse_seq_pos -= 3;
+                        mer_idx = codon_index(encoded_sequence, reverse_seq_pos)
+                            | ((mer_idx & CODON_INDEX_MASK) << (2 * CODON_LENGTH));
+                    }
+                    frame_scores[frame_index] = score;
                 }
                 node.scores.coding_score = frame_scores[frame_index];
-                last_positions[frame_index] = node.position.index;
+                last_positions[frame_index] = index;
             }
         }
     }
 }
 
-/// Dicodon index at `position`, reusing the second codon of the dicodon that
-/// was read three bases downstream (`previous`), so that walking an ORF codon
-/// by codon reads every base once.
-#[inline]
-fn next_dicodon_index(encoded_sequence: &[u8], position: usize, previous: Option<usize>) -> usize {
-    match previous {
-        Some(previous) => {
-            calculate_kmer_index(CODON_LENGTH, encoded_sequence, position)
-                | ((previous & CODON_INDEX_MASK) << (2 * CODON_LENGTH))
-        }
-        None => calculate_kmer_index(DICODON_SIZE, encoded_sequence, position),
-    }
-}
-
 const CODON_INDEX_MASK: usize = (1 << (2 * CODON_LENGTH)) - 1;
+const DICODON_INDEX_MASK: usize = (1 << (2 * DICODON_SIZE)) - 1;
 
 /// Process nodes for a specific strand in the second pass (score normalization)
 ///
@@ -907,13 +1001,76 @@ fn calculate_length_factor(gene_size_codons: f64, no_stop_probability: f64) -> f
     }
 }
 
+/// [`calculate_length_factor`] for one probability of a codon not being a
+/// stop, remembering the factor of every gene length it is asked for.
+///
+/// The factor is a function of the gene length alone, and costs two `pow`
+/// and two `ln` calls, while the start nodes of a sequence share a few
+/// thousand distinct gene lengths. The factors are filled in as they are
+/// asked for, by whichever thread asks first, so the two strands of a
+/// sequence, and every sequence a preset model scores, share one table.
+#[derive(Debug)]
+pub(crate) struct LengthFactors {
+    no_stop_probability: f64,
+    /// Factor per gene length in bases, as the bits of an `f64`;
+    /// [`Self::UNKNOWN`] until computed.
+    by_gene_length: Box<[AtomicU64]>,
+}
+
+impl LengthFactors {
+    /// Gene lengths below this are remembered: the lengths of genes up to
+    /// [`MAX_GENE_SIZE_CODONS`], past which the factor is cheap to compute.
+    const REMEMBERED_LENGTHS: usize = 3 * MAX_GENE_SIZE_CODONS as usize;
+    /// Not the bits of any factor: a factor that is not a number has the
+    /// bits the arithmetic gives it, which are not all ones.
+    const UNKNOWN: u64 = u64::MAX;
+
+    /// The length factors for the model of `training`.
+    pub(crate) fn for_training(training: &Training) -> Self {
+        Self::new(calculate_no_stop_probability(
+            training.gc_content,
+            training.translation_table,
+        ))
+    }
+
+    fn new(no_stop_probability: f64) -> Self {
+        Self {
+            no_stop_probability,
+            by_gene_length: (0..Self::REMEMBERED_LENGTHS)
+                .map(|_| AtomicU64::new(Self::UNKNOWN))
+                .collect(),
+        }
+    }
+
+    #[inline]
+    fn factor(&self, node: &Node) -> f64 {
+        let gene_length = calculate_gene_length(node);
+        let Some(remembered) = self.by_gene_length.get(gene_length) else {
+            return calculate_length_factor(
+                calculate_gene_size_codons(node),
+                self.no_stop_probability,
+            );
+        };
+        // Threads that find the factor unknown compute the same value, so
+        // it does not matter whose is stored.
+        let bits = remembered.load(Ordering::Relaxed);
+        if bits != Self::UNKNOWN {
+            return f64::from_bits(bits);
+        }
+        let factor =
+            calculate_length_factor(calculate_gene_size_codons(node), self.no_stop_probability);
+        remembered.store(factor.to_bits(), Ordering::Relaxed);
+        factor
+    }
+}
+
 /// Apply length-based adjustments to coding scores for a specific strand
 ///
 /// This adds length factors and applies score thresholds based on gene size
 fn process_strand_third_pass(
     nodes: &mut StrandNodes,
     strand: Strand,
-    no_stop_probability: f64,
+    length_factors: &LengthFactors,
     frame_scores: &mut [f64; 3],
 ) {
     frame_scores.fill(CODING_SCORE_SENTINEL);
@@ -924,8 +1081,7 @@ fn process_strand_third_pass(
         if node.position.codon_type == CodonType::Stop {
             frame_scores[frame_index] = CODING_SCORE_SENTINEL;
         } else {
-            let gene_size_codons = calculate_gene_size_codons(node);
-            let length_factor = calculate_length_factor(gene_size_codons, no_stop_probability);
+            let length_factor = length_factors.factor(node);
             let mut adjusted_length_factor = length_factor;
 
             // Apply frame-based adjustments
@@ -957,32 +1113,6 @@ fn process_strand_third_pass(
     }
 }
 
-/// Calculate raw coding scores with cached no_stop_probability
-///
-/// This is a three-pass algorithm:
-/// 1. First pass: Calculate cumulative dicodon scores from stop to start
-/// 2. Second pass: Normalize scores relative to maximum in each frame
-/// 3. Third pass: Add length-based factors and apply thresholds
-pub fn raw_coding_score_optimized(
-    encoded_sequence: &[u8],
-    reverse_complement_encoded_sequence: &[u8],
-    sequence_length: usize,
-    nodes: &mut [Node],
-    training: &Training,
-    no_stop_probability: f64,
-) {
-    // The three passes, per strand: cumulative dicodon scores from stop to
-    // start, normalisation to the frame's maximum, length factors.
-    score_strands(
-        encoded_sequence,
-        reverse_complement_encoded_sequence,
-        sequence_length,
-        nodes,
-        training,
-        no_stop_probability,
-    );
-}
-
 /// Calculate raw coding scores
 ///
 /// This is a three-pass algorithm:
@@ -1004,7 +1134,7 @@ pub fn raw_coding_score(
         sequence_length,
         nodes,
         training,
-        no_stop_probability,
+        &LengthFactors::new(no_stop_probability),
     );
 }
 
@@ -1586,12 +1716,128 @@ mod tests {
         process_strand_third_pass(
             &mut forward,
             Strand::Forward,
-            no_stop_probability,
+            &LengthFactors::new(no_stop_probability),
             &mut frame_scores,
         );
 
         // Should have added length factor to coding score
         assert!(nodes[0].scores.coding_score > 5.0);
         assert!(nodes[0].scores.coding_score.is_finite());
+    }
+
+    #[test]
+    fn length_factors_remember_what_calculate_length_factor_gives() {
+        let no_stop_probability = calculate_no_stop_probability(0.43, 11);
+        let length_factors = LengthFactors::new(no_stop_probability);
+        // Lengths on both sides of the longest remembered one, each asked
+        // for twice: computed, then remembered.
+        for gene_length in [
+            0usize, 3, 87, 90, 1500, 2996, 2997, 2999, 3000, 3003, 90_000,
+        ] {
+            let node = create_test_node(
+                Strand::Forward,
+                30,
+                CodonType::Atg,
+                30 + gene_length as isize,
+            );
+            let expected =
+                calculate_length_factor(((gene_length + 3) as f64) / 3.0, no_stop_probability);
+            for _ in 0..2 {
+                assert_eq!(
+                    length_factors.factor(&node).to_bits(),
+                    expected.to_bits(),
+                    "gene length {gene_length}"
+                );
+            }
+        }
+    }
+
+    /// The neighbour search as a walk over the nodes: a forward start among
+    /// the first nodes looks back for an edge node with its stop value, a
+    /// reverse start among the last nodes looks ahead.
+    fn has_edge_neighbour_walking(nodes: &[Node], current_index: usize) -> bool {
+        let current = &nodes[current_index];
+        let is_edge_of_frame = |node: &Node| {
+            node.position.is_edge && node.position.stop_value == current.position.stop_value
+        };
+        if current_index < NODE_SEARCH_WINDOW && current.position.strand == Strand::Forward {
+            nodes[..current_index].iter().any(is_edge_of_frame)
+        } else if current_index >= nodes.len().saturating_sub(NODE_SEARCH_WINDOW)
+            && current.position.strand == Strand::Reverse
+        {
+            nodes[current_index + 1..].iter().any(is_edge_of_frame)
+        } else {
+            false
+        }
+    }
+
+    #[test]
+    fn edge_stops_find_the_edge_neighbours_a_walk_finds() {
+        let params = ScoringParams::from_training(&create_test_training());
+        let mut state = 0xA076_1D64_78BD_642F_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        // Fewer nodes than the search window, exactly as many, and enough
+        // for the middle nodes to search neither end.
+        let mut bonuses = 0;
+        for node_count in [1, 2, 37, NODE_SEARCH_WINDOW, 3 * NODE_SEARCH_WINDOW + 5] {
+            let mut nodes: Vec<Node> = (0..node_count)
+                .map(|index| {
+                    let strand = if next() % 2 == 0 {
+                        Strand::Forward
+                    } else {
+                        Strand::Reverse
+                    };
+                    let codon_type = if next() % 4 == 0 {
+                        CodonType::Stop
+                    } else {
+                        CodonType::Atg
+                    };
+                    // Few distinct stop values, so that nodes share them.
+                    let mut node =
+                        create_test_node(strand, 3 * index, codon_type, (next() % 12) as isize);
+                    node.position.is_edge = next() % 9 == 0;
+                    node
+                })
+                .collect();
+
+            let mut edge_stops = EdgeStops::new(&nodes);
+            for index in 0..node_count {
+                if nodes[index].position.codon_type == CodonType::Stop {
+                    edge_stops.scored(index, &nodes[index]);
+                    continue;
+                }
+                let boundary_bonus_applied = next() % 11 == 0;
+                let expected = !nodes[index].position.is_edge
+                    && !boundary_bonus_applied
+                    && has_edge_neighbour_walking(&nodes, index);
+
+                nodes[index].scores.upstream_score = 1.0;
+                apply_edge_upstream_bonus_for_neighbors(
+                    &mut nodes[index],
+                    index,
+                    node_count,
+                    &params,
+                    boundary_bonus_applied,
+                    &edge_stops,
+                );
+                let bonus_applied = nodes[index].scores.upstream_score != 1.0;
+                assert_eq!(bonus_applied, expected, "{node_count} nodes, node {index}");
+                bonuses += usize::from(bonus_applied);
+
+                // Scoring turns some start nodes into edge nodes, which the
+                // nodes after them then see.
+                if next() % 7 == 0 {
+                    nodes[index].position.is_edge = true;
+                }
+                edge_stops.scored(index, &nodes[index]);
+            }
+        }
+        assert!(bonuses > 50, "only {bonuses} bonuses");
     }
 }

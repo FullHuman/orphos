@@ -237,14 +237,10 @@ fn analyze_sequence(fasta_content: &str, options: Option<OrphosOptions>) -> PyRe
 
     // Run Orphos analysis
     let analyzer = OrphosAnalyzer::new(config);
-    let mut all_results = Vec::new();
-
-    for (header, description, seq_bytes) in sequences {
-        let result = analyzer
-            .analyze_sequence_bytes(&seq_bytes, header, description)
-            .map_err(|e| PyValueError::new_err(format!("Analysis error: {}", e)))?;
-        all_results.push(result);
-    }
+    // The sequences are numbered in the order of the input.
+    let all_results = analyzer
+        .analyze_sequences(sequences)
+        .map_err(|e| PyValueError::new_err(format!("Analysis error: {}", e)))?;
 
     // Generate output
     let mut output = Vec::new();

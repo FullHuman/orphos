@@ -66,7 +66,7 @@ use crate::{
         UPSTREAM_SKIP_END, UPSTREAM_START_POS, WEIGHT_CLAMP_MAX, WEIGHT_CLAMP_MIN,
     },
     sequence::calculate_kmer_index,
-    types::{CodonType, MotifWeights, Node, OrphosError, Training},
+    types::{Motif, MotifWeights, OrphosError, Training},
 };
 
 /// Checks if training should use Shine-Dalgarno motifs.
@@ -194,31 +194,22 @@ fn convert_upstream_composition_to_log_scores(training: &mut Training) {
         });
 }
 
-/// Update motif counts during training
-fn update_motif_counts(
+/// Update motif counts during training for a start codon at
+/// `start_position` of the strand `working_sequence` whose best upstream
+/// motif is `motif`.
+fn count_motif(
     motif_counts: &mut MotifWeights,
     zero_motif_count: &mut f64,
-    sequence: &[u8],
-    reverse_sequence: &[u8],
-    sequence_length: usize,
-    node: &Node,
+    motif: &Motif,
+    working_sequence: &[u8],
+    start_position: usize,
     stage: usize,
 ) {
-    if node.position.codon_type == CodonType::Stop || node.position.is_edge {
-        return;
-    }
-
-    let is_zero = node.motif_info.best_motif.length == 0;
+    let is_zero = motif.length == 0;
     if is_zero {
         *zero_motif_count += 1.0;
         return;
     }
-
-    let (working_sequence, start_position) = match node.position.strand {
-        Strand::Forward => (sequence, node.position.index),
-        Strand::Reverse => (reverse_sequence, sequence_length - 1 - node.position.index),
-        Strand::Unknown => unreachable!(),
-    };
 
     match stage {
         0 => {
@@ -241,7 +232,6 @@ fn update_motif_counts(
             }
         }
         1 => {
-            let motif = &node.motif_info.best_motif;
             motif_counts[motif.length - MIN_MOTIF_LENGTH][motif.space_index][motif.index] += 1.0;
 
             for (submotif_length_index, motif_counts_length) in motif_counts
@@ -265,7 +255,6 @@ fn update_motif_counts(
             }
         }
         2 => {
-            let motif = &node.motif_info.best_motif;
             motif_counts[motif.length - MIN_MOTIF_LENGTH][motif.space_index][motif.index] += 1.0;
         }
         _ => {}
@@ -397,51 +386,30 @@ fn update_motif_weights(
         return;
     }
 
-    // Make a mutable copy of background so we can zero out bad motifs (matches C)
-    let mut bg = *motif_background;
-
-    // counts of bad motifs to zbg), then zero their slots in the background matrix.
+    // A bad motif folds its real counts into the "no motif" counts and has
+    // no background, which makes its weight the lowest (C zeroes mbg and
+    // then takes -4.0 for a zero background). A good motif weighs the log
+    // of its real frequency over its background frequency.
     let mut zreal = zero_motif_real;
     let mut zbg = zero_motif_background; // already normalized earlier
-
-    let mut _good_real_sum = 0.0f64;
-    let mut _bad_real_sum = 0.0f64;
-
-    // We'll accumulate a temporary array for normalized real frequencies of good motifs
-    // Heap allocated: half a megabyte would not fit on small (Windows) stacks.
-    let mut real_freqs = vec![[[0.0f64; MAX_MOTIF_INDEX]; NUM_MOTIF_SIZES]; NUM_MOTIF_SIZES];
 
     for l in 0..NUM_MOTIF_SIZES {
         for s in 0..NUM_MOTIF_SIZES {
             for idx in 0..MAX_MOTIF_INDEX {
                 let r = motif_real[l][s][idx];
-                if motif_good[l][s][idx] == 0 {
-                    // Bad motif: fold raw real counts into zreal and zbg
+                let w = if motif_good[l][s][idx] == 0 {
                     // (C code: zreal += mreal; zbg += mreal)
                     zreal += r;
                     zbg += r;
-                    _bad_real_sum += r;
-                    // Zero out background slot (so bg==0 triggers -4.0)
-                    bg[l][s][idx] = 0.0;
-                    // real_freqs remains 0 here
-                } else {
-                    // Good motif: keep and normalize by sum later
-                    _good_real_sum += r;
-                    real_freqs[l][s][idx] = r / sum_real;
-                }
-            }
-        }
-    }
-
-    for l in 0..NUM_MOTIF_SIZES {
-        for s in 0..NUM_MOTIF_SIZES {
-            for idx in 0..MAX_MOTIF_INDEX {
-                let rf = real_freqs[l][s][idx];
-                let b = bg[l][s][idx];
-                let w = if b != 0.0 {
-                    (rf / b).ln()
-                } else {
                     WEIGHT_CLAMP_MIN
+                } else {
+                    let rf = r / sum_real;
+                    let b = motif_background[l][s][idx];
+                    if b != 0.0 {
+                        (rf / b).ln()
+                    } else {
+                        WEIGHT_CLAMP_MIN
+                    }
                 };
                 training.motif_weights[l][s][idx] = w.clamp(WEIGHT_CLAMP_MIN, WEIGHT_CLAMP_MAX);
             }
@@ -488,8 +456,39 @@ pub const fn write_training_file(_file: &str, _training: &Training) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Motif, NodeMotifInfo, NodePosition, NodeScores, NodeState};
+    use crate::types::{
+        CodonType, Motif, Node, NodeMotifInfo, NodePosition, NodeScores, NodeState,
+    };
     use bio::bio_types::strand::Strand;
+
+    /// [`count_motif`] for the best motif of `node`, on its strand.
+    fn update_motif_counts(
+        motif_counts: &mut MotifWeights,
+        zero_motif_count: &mut f64,
+        sequence: &[u8],
+        reverse_sequence: &[u8],
+        sequence_length: usize,
+        node: &Node,
+        stage: usize,
+    ) {
+        if node.position.codon_type == CodonType::Stop || node.position.is_edge {
+            return;
+        }
+
+        let (working_sequence, start_position) = match node.position.strand {
+            Strand::Forward => (sequence, node.position.index),
+            Strand::Reverse => (reverse_sequence, sequence_length - 1 - node.position.index),
+            Strand::Unknown => unreachable!(),
+        };
+        count_motif(
+            motif_counts,
+            zero_motif_count,
+            &node.motif_info.best_motif,
+            working_sequence,
+            start_position,
+            stage,
+        );
+    }
 
     fn create_test_training() -> Training {
         Training {
