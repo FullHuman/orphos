@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-10
+
 ### Added
 
 - `OrphosAnalyzer::analyze_sequences` analyzes the records of one input in
@@ -189,6 +191,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for circular sequences (https://github.com/FullHuman/orphos/issues/5)
 - Support for BED output (https://github.com/FullHuman/orphos/issues/4)
 
+[0.5.0]: https://github.com/FullHuman/orphos/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/FullHuman/orphos/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FullHuman/orphos/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FullHuman/orphos/releases/tag/v0.2.0
