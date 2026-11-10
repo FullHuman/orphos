@@ -1,6 +1,6 @@
 use orphos_core::config::{OrphosConfig, OutputFormat};
 use orphos_core::engine::OrphosAnalyzer;
-use orphos_core::output::write_results;
+use orphos_core::output::write_all_results;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use wasm_bindgen::prelude::*;
@@ -132,21 +132,15 @@ pub fn analyze_sequence(fasta_content: &str, options_js: JsValue) -> Result<Orph
 
     // Run Orphos analysis
     let analyzer = OrphosAnalyzer::new(config);
-    let mut all_results = Vec::new();
-
-    for (header, description, seq_bytes) in sequences {
-        let result = analyzer
-            .analyze_sequence_bytes(&seq_bytes, header, description)
-            .map_err(|e| JsValue::from_str(&format!("Analysis error: {}", e)))?;
-        all_results.push(result);
-    }
+    // The sequences are numbered in the order of the input.
+    let all_results = analyzer
+        .analyze_sequences(sequences)
+        .map_err(|e| JsValue::from_str(&format!("Analysis error: {}", e)))?;
 
     // Generate output
     let mut output = Vec::new();
-    for result in &all_results {
-        write_results(&mut output, result, analyzer.config.output_format)
-            .map_err(|e| JsValue::from_str(&format!("Output error: {}", e)))?;
-    }
+    write_all_results(&mut output, &all_results, analyzer.config.output_format)
+        .map_err(|e| JsValue::from_str(&format!("Output error: {}", e)))?;
 
     let output_str =
         String::from_utf8(output).map_err(|e| JsValue::from_str(&format!("UTF-8 error: {}", e)))?;

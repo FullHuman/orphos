@@ -326,4 +326,34 @@ const BINS: [MetagenomicBin; 50] = [
 /// until ported.
 pub mod presets;
 
-pub use presets::get_preset_training_ref;
+pub use presets::{get_preset_training_ref, get_preset_training_shared};
+
+use std::sync::OnceLock;
+
+use crate::node::{LengthFactors, RbsLookup};
+
+/// The Shine-Dalgarno motif searches of each preset, tabulated on first use.
+static PRESET_RBS_LOOKUPS: [OnceLock<RbsLookup>; BINS.len()] =
+    [const { OnceLock::new() }; BINS.len()];
+
+/// The tabulated Shine-Dalgarno motif searches for the weights of preset
+/// `id`. The table depends on the weights alone, and building it costs more
+/// than scoring a short sequence with it, so it is kept for every sequence
+/// the preset scores.
+pub(crate) fn preset_rbs_lookup(id: usize) -> Option<&'static RbsLookup> {
+    let training = get_preset_training_ref(id)?;
+    let lookup = PRESET_RBS_LOOKUPS.get(id)?;
+    Some(lookup.get_or_init(|| RbsLookup::new(&*training.rbs_weights)))
+}
+
+/// The gene length factors of each preset, created on first use.
+static PRESET_LENGTH_FACTORS: [OnceLock<LengthFactors>; BINS.len()] =
+    [const { OnceLock::new() }; BINS.len()];
+
+/// The gene length factors for the model of preset `id`, shared by every
+/// sequence the preset scores.
+pub(crate) fn preset_length_factors(id: usize) -> Option<&'static LengthFactors> {
+    let training = get_preset_training_ref(id)?;
+    let length_factors = PRESET_LENGTH_FACTORS.get(id)?;
+    Some(length_factors.get_or_init(|| LengthFactors::for_training(training)))
+}

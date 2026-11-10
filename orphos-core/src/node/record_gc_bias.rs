@@ -2,11 +2,25 @@ use bio::bio_types::strand::Strand;
 
 use crate::node::strands::{StrandNodes, has_start_before_stop, split_by_strand};
 use crate::parallel;
+use crate::sequence::FramePlot;
 use crate::types::{CodonType, Node, Training};
 
 /// Record GC bias for training
 pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut Training) {
-    if nodes.is_empty() || gc_frame_data.is_empty() {
+    record_gc_bias_of(gc_frame_data, nodes, training);
+}
+
+/// [`record_gc_bias`] for a frame plot in either of its representations:
+/// one value per position, or the running totals of [`GcFramePlot`], with
+/// which the plot values of the codons between two nodes are tallied
+/// without visiting them.
+///
+/// [`GcFramePlot`]: crate::sequence::GcFramePlot
+pub(crate) fn record_gc_bias_of<P>(gc_frame_plot: &P, nodes: &mut [Node], training: &mut Training)
+where
+    P: FramePlot + Sync + ?Sized,
+{
+    if nodes.is_empty() || gc_frame_plot.is_empty() {
         return;
     }
 
@@ -21,13 +35,13 @@ pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut 
     let mut last_position = [0; 3];
     if has_start_before_stop(&reverse) {
         process_forward_strand(
-            gc_frame_data,
+            gc_frame_plot,
             &mut forward,
             &mut frame_counts,
             &mut last_position,
         );
         process_reverse_strand(
-            gc_frame_data,
+            gc_frame_plot,
             &mut reverse,
             &mut frame_counts,
             &mut last_position,
@@ -36,7 +50,7 @@ pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut 
         parallel::join(
             || {
                 process_forward_strand(
-                    gc_frame_data,
+                    gc_frame_plot,
                     &mut forward,
                     &mut frame_counts,
                     &mut last_position,
@@ -44,7 +58,7 @@ pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut 
             },
             || {
                 process_reverse_strand(
-                    gc_frame_data,
+                    gc_frame_plot,
                     &mut reverse,
                     &mut [[0i32; 3]; 3],
                     &mut [0; 3],
@@ -58,80 +72,75 @@ pub fn record_gc_bias(gc_frame_data: &[i32], nodes: &mut [Node], training: &mut 
 }
 
 /// Process nodes on the forward strand
-fn process_forward_strand(
-    gc_frame_data: &[i32],
+fn process_forward_strand<P: FramePlot + ?Sized>(
+    gc_frame_plot: &P,
     nodes: &mut StrandNodes,
     frame_counts: &mut [[i32; 3]; 3],
     last_position: &mut [usize; 3],
 ) {
     nodes.iter_mut().rev().for_each(|node| {
-        let frame_index = node.position.index % 3;
+        let index = node.position.index;
+        let frame_index = index % 3;
         let frame_offset = 3 - frame_index;
+        let bin = |gc_value| forward_gc_bin(gc_value, frame_offset);
 
         if node.position.codon_type == CodonType::Stop {
             // Reset counters for this frame
-            frame_counts[frame_index]
-                .iter_mut()
-                .for_each(|count| *count = 0);
-            last_position[frame_index] = node.position.index;
-
-            if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
-                frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] = 1;
-            }
+            frame_counts[frame_index] = [0; 3];
+            last_position[frame_index] = index;
+            gc_frame_plot.tally(index, 1, bin, &mut frame_counts[frame_index]);
         } else {
-            if last_position[frame_index] >= 3 {
-                let mut position = last_position[frame_index] - 3;
-
-                while position >= node.position.index {
-                    if let Some(&gc_value) = gc_frame_data.get(position) {
-                        frame_counts[frame_index][forward_gc_bin(gc_value, frame_offset)] += 1;
-                    }
-
-                    if position < 3 {
-                        break;
-                    }
-                    position -= 3;
-                }
+            // The codons from the last node of the frame down to this one:
+            // `last - 3`, `last - 6`, ... while at or after `index`.
+            let last = last_position[frame_index];
+            if last >= index + 3 {
+                let codons = (last - index) / 3;
+                gc_frame_plot.tally(
+                    last - 3 * codons,
+                    codons,
+                    bin,
+                    &mut frame_counts[frame_index],
+                );
             }
 
             update_node_gc_info(node, &frame_counts[frame_index]);
-            last_position[frame_index] = node.position.index;
+            last_position[frame_index] = index;
         }
     });
 }
 
 /// Process nodes on the reverse strand
-fn process_reverse_strand(
-    gc_frame_data: &[i32],
+fn process_reverse_strand<P: FramePlot + ?Sized>(
+    gc_frame_plot: &P,
     nodes: &mut StrandNodes,
     frame_counts: &mut [[i32; 3]; 3],
     last_position: &mut [usize; 3],
 ) {
     nodes.iter_mut().for_each(|node| {
-        let frame_index = node.position.index % 3;
+        let index = node.position.index;
+        let frame_index = index % 3;
+        let bin = |gc_value| reverse_gc_bin(gc_value, frame_index);
 
         if node.position.codon_type == CodonType::Stop {
             // Reset counters for this frame
-            frame_counts[frame_index]
-                .iter_mut()
-                .for_each(|count| *count = 0);
-            last_position[frame_index] = node.position.index;
-
-            if let Some(&gc_value) = gc_frame_data.get(node.position.index) {
-                frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] = 1;
-            }
+            frame_counts[frame_index] = [0; 3];
+            last_position[frame_index] = index;
+            gc_frame_plot.tally(index, 1, bin, &mut frame_counts[frame_index]);
         } else {
-            let mut position = last_position[frame_index] + 3;
-
-            while position <= node.position.index && position < gc_frame_data.len() {
-                if let Some(&gc_value) = gc_frame_data.get(position) {
-                    frame_counts[frame_index][reverse_gc_bin(gc_value, frame_index)] += 1;
-                }
-                position += 3;
+            // The codons from the last node of the frame up to this one:
+            // `last + 3`, `last + 6`, ... while at or before `index`.
+            let last = last_position[frame_index];
+            if index >= last + 3 {
+                gc_frame_plot.tally(
+                    last + 3,
+                    (index - last) / 3,
+                    bin,
+                    &mut frame_counts[frame_index],
+                );
             }
 
             update_node_gc_info(node, &frame_counts[frame_index]);
-            last_position[frame_index] = node.position.index;
+            last_position[frame_index] = index;
         }
     });
 }
@@ -366,7 +375,7 @@ mod tests {
 
         let (mut forward, _) = split_by_strand(&mut nodes);
         process_forward_strand(
-            &gc_frame_data,
+            gc_frame_data.as_slice(),
             &mut forward,
             &mut frame_counts,
             &mut last_position,
@@ -394,7 +403,7 @@ mod tests {
 
         let (_, mut reverse) = split_by_strand(&mut nodes);
         process_reverse_strand(
-            &gc_frame_data,
+            gc_frame_data.as_slice(),
             &mut reverse,
             &mut frame_counts,
             &mut last_position,
@@ -541,5 +550,54 @@ mod tests {
 
         // Should handle out-of-bounds indices gracefully
         assert!(nodes[0].state.gc_bias_frame <= 2);
+    }
+
+    /// The GC bias record of the nodes of a sequence must not depend on how
+    /// the frame plot is stored.
+    #[test]
+    fn frame_plot_totals_record_the_same_bias_as_plot_values() {
+        use crate::node::{add_nodes, sort_nodes_by_position};
+        use crate::sequence::encoded::EncodedSequence;
+        use crate::sequence::{GcFramePlot, calc_most_gc_frame};
+
+        let mut random = crate::test_random::XorShift(0x2545_F491_4F6C_DD1D_u64);
+        let mut next = || random.next();
+        // Lengths of every residue modulo 3: the bases after the last whole
+        // triplet have no frame, and nodes near the end read them.
+        for (length, circular) in [
+            (6000, false),
+            (6001, false),
+            (6002, false),
+            (9001, true),
+            (9002, true),
+        ] {
+            let bases: Vec<u8> = (0..length)
+                .map(|_| b"ACGGCT"[(next() % 6) as usize])
+                .collect();
+            let encoded = EncodedSequence::without_masking(&bases);
+            let mut training = create_test_training();
+            let mut nodes = Vec::new();
+            add_nodes(&encoded, &mut nodes, false, circular, &training).unwrap();
+            sort_nodes_by_position(&mut nodes);
+            assert!(nodes.len() > 100);
+            let mut nodes_from_totals = nodes.clone();
+            let mut training_from_totals = training.clone();
+
+            let values = calc_most_gc_frame(&encoded.forward_sequence, length);
+            record_gc_bias(&values, &mut nodes, &mut training);
+            let totals = GcFramePlot::new(&encoded.forward_sequence, length);
+            record_gc_bias_of(&totals, &mut nodes_from_totals, &mut training_from_totals);
+
+            assert_eq!(
+                format!("{nodes:?}"),
+                format!("{nodes_from_totals:?}"),
+                "length {length}"
+            );
+            assert_eq!(
+                training.gc_bias_factors,
+                training_from_totals.gc_bias_factors
+            );
+            assert!(training.gc_bias_factors.iter().any(|&bias| bias != 1.0));
+        }
     }
 }

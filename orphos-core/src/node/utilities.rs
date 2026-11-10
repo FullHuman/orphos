@@ -1,7 +1,7 @@
 use bio::bio_types::strand::Strand;
 use rayon::prelude::*;
 
-use crate::types::{Motif, Node, NodeState};
+use crate::types::{Motif, Node, NodeScores, NodeState};
 
 /// Reset all scoring data for nodes to default values
 ///
@@ -88,6 +88,24 @@ pub fn sort_nodes_by_position(nodes: &mut [Node]) {
 pub fn reset_nodes_to_pristine(nodes: &mut [Node]) {
     for node in nodes {
         node.scores = Default::default();
+        node.state = Default::default();
+        node.motif_info = Default::default();
+    }
+}
+
+/// [`reset_nodes_to_pristine`], except that every node keeps its raw coding
+/// score.
+///
+/// The raw coding score of a node depends on its position, the sequence and
+/// the dicodon table of the model. Start training leaves all three as they
+/// were, so the score training computed is the score the gene prediction
+/// that follows would compute again.
+pub(crate) fn reset_nodes_keeping_coding_scores(nodes: &mut [Node]) {
+    for node in nodes {
+        node.scores = NodeScores {
+            coding_score: node.scores.coding_score,
+            ..Default::default()
+        };
         node.state = Default::default();
         node.motif_info = Default::default();
     }

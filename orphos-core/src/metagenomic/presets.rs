@@ -1,7 +1,7 @@
 #![allow(clippy::approx_constant)]
 
 use crate::types::Training;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 fn base_training() -> Training {
     Training {
@@ -12,7 +12,7 @@ fn base_training() -> Training {
     }
 }
 
-static PRESET_0: OnceLock<Training> = OnceLock::new();
+static PRESET_0: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_0() -> Training {
     let mut t = base_training();
     t.gc_content = 0.293000;
@@ -568,7 +568,7 @@ fn preset_0() -> Training {
     t
 }
 
-static PRESET_1: OnceLock<Training> = OnceLock::new();
+static PRESET_1: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_1() -> Training {
     let mut t = base_training();
     t.gc_content = 0.400000;
@@ -1145,7 +1145,7 @@ fn preset_1() -> Training {
     t
 }
 
-static PRESET_2: OnceLock<Training> = OnceLock::new();
+static PRESET_2: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_2() -> Training {
     let mut t = base_training();
     t.gc_content = 0.311000;
@@ -1713,7 +1713,7 @@ fn preset_2() -> Training {
     t
 }
 
-static PRESET_3: OnceLock<Training> = OnceLock::new();
+static PRESET_3: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_3() -> Training {
     let mut t = base_training();
     t.gc_content = 0.563000;
@@ -2303,7 +2303,7 @@ fn preset_3() -> Training {
     t
 }
 
-static PRESET_4: OnceLock<Training> = OnceLock::new();
+static PRESET_4: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_4() -> Training {
     let mut t = base_training();
     t.gc_content = 0.558000;
@@ -2860,7 +2860,7 @@ fn preset_4() -> Training {
     t
 }
 
-static PRESET_5: OnceLock<Training> = OnceLock::new();
+static PRESET_5: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_5() -> Training {
     let mut t = base_training();
     t.gc_content = 0.498000;
@@ -3416,7 +3416,7 @@ fn preset_5() -> Training {
     t
 }
 
-static PRESET_6: OnceLock<Training> = OnceLock::new();
+static PRESET_6: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_6() -> Training {
     let mut t = base_training();
     t.gc_content = 0.416000;
@@ -3970,7 +3970,7 @@ fn preset_6() -> Training {
     t
 }
 
-static PRESET_7: OnceLock<Training> = OnceLock::new();
+static PRESET_7: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_7() -> Training {
     let mut t = base_training();
     t.gc_content = 0.486000;
@@ -4538,7 +4538,7 @@ fn preset_7() -> Training {
     t
 }
 
-static PRESET_8: OnceLock<Training> = OnceLock::new();
+static PRESET_8: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_8() -> Training {
     let mut t = base_training();
     t.gc_content = 0.432000;
@@ -5136,7 +5136,7 @@ fn preset_8() -> Training {
     t
 }
 
-static PRESET_9: OnceLock<Training> = OnceLock::new();
+static PRESET_9: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_9() -> Training {
     let mut t = base_training();
     t.gc_content = 0.572000;
@@ -5692,7 +5692,7 @@ fn preset_9() -> Training {
     t
 }
 
-static PRESET_10: OnceLock<Training> = OnceLock::new();
+static PRESET_10: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_10() -> Training {
     let mut t = base_training();
     t.gc_content = 0.597000;
@@ -6247,7 +6247,7 @@ fn preset_10() -> Training {
     t
 }
 
-static PRESET_11: OnceLock<Training> = OnceLock::new();
+static PRESET_11: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_11() -> Training {
     let mut t = base_training();
     t.gc_content = 0.350000;
@@ -6830,7 +6830,7 @@ fn preset_11() -> Training {
     t
 }
 
-static PRESET_12: OnceLock<Training> = OnceLock::new();
+static PRESET_12: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_12() -> Training {
     let mut t = base_training();
     t.gc_content = 0.490000;
@@ -7418,7 +7418,7 @@ fn preset_12() -> Training {
     t
 }
 
-static PRESET_13: OnceLock<Training> = OnceLock::new();
+static PRESET_13: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_13() -> Training {
     let mut t = base_training();
     t.gc_content = 0.698000;
@@ -7977,7 +7977,7 @@ fn preset_13() -> Training {
     t
 }
 
-static PRESET_14: OnceLock<Training> = OnceLock::new();
+static PRESET_14: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_14() -> Training {
     let mut t = base_training();
     t.gc_content = 0.572000;
@@ -8551,7 +8551,7 @@ fn preset_14() -> Training {
     t
 }
 
-static PRESET_15: OnceLock<Training> = OnceLock::new();
+static PRESET_15: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_15() -> Training {
     let mut t = base_training();
     t.gc_content = 0.489000;
@@ -9119,7 +9119,7 @@ fn preset_15() -> Training {
     t
 }
 
-static PRESET_16: OnceLock<Training> = OnceLock::new();
+static PRESET_16: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_16() -> Training {
     let mut t = base_training();
     t.gc_content = 0.565000;
@@ -9678,7 +9678,7 @@ fn preset_16() -> Training {
     t
 }
 
-static PRESET_17: OnceLock<Training> = OnceLock::new();
+static PRESET_17: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_17() -> Training {
     let mut t = base_training();
     t.gc_content = 0.416000;
@@ -10234,7 +10234,7 @@ fn preset_17() -> Training {
     t
 }
 
-static PRESET_18: OnceLock<Training> = OnceLock::new();
+static PRESET_18: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_18() -> Training {
     let mut t = base_training();
     t.gc_content = 0.453000;
@@ -10790,7 +10790,7 @@ fn preset_18() -> Training {
     t
 }
 
-static PRESET_19: OnceLock<Training> = OnceLock::new();
+static PRESET_19: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_19() -> Training {
     let mut t = base_training();
     t.gc_content = 0.631000;
@@ -11348,7 +11348,7 @@ fn preset_19() -> Training {
     t
 }
 
-static PRESET_20: OnceLock<Training> = OnceLock::new();
+static PRESET_20: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_20() -> Training {
     let mut t = base_training();
     t.gc_content = 0.507000;
@@ -11904,7 +11904,7 @@ fn preset_20() -> Training {
     t
 }
 
-static PRESET_21: OnceLock<Training> = OnceLock::new();
+static PRESET_21: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_21() -> Training {
     let mut t = base_training();
     t.gc_content = 0.479000;
@@ -12470,7 +12470,7 @@ fn preset_21() -> Training {
     t
 }
 
-static PRESET_22: OnceLock<Training> = OnceLock::new();
+static PRESET_22: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_22() -> Training {
     let mut t = base_training();
     t.gc_content = 0.571000;
@@ -13026,7 +13026,7 @@ fn preset_22() -> Training {
     t
 }
 
-static PRESET_23: OnceLock<Training> = OnceLock::new();
+static PRESET_23: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_23() -> Training {
     let mut t = base_training();
     t.gc_content = 0.537000;
@@ -13584,7 +13584,7 @@ fn preset_23() -> Training {
     t
 }
 
-static PRESET_24: OnceLock<Training> = OnceLock::new();
+static PRESET_24: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_24() -> Training {
     let mut t = base_training();
     t.gc_content = 0.357000;
@@ -14140,7 +14140,7 @@ fn preset_24() -> Training {
     t
 }
 
-static PRESET_25: OnceLock<Training> = OnceLock::new();
+static PRESET_25: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_25() -> Training {
     let mut t = base_training();
     t.gc_content = 0.573000;
@@ -14696,7 +14696,7 @@ fn preset_25() -> Training {
     t
 }
 
-static PRESET_26: OnceLock<Training> = OnceLock::new();
+static PRESET_26: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_26() -> Training {
     let mut t = base_training();
     t.gc_content = 0.612000;
@@ -15284,7 +15284,7 @@ fn preset_26() -> Training {
     t
 }
 
-static PRESET_27: OnceLock<Training> = OnceLock::new();
+static PRESET_27: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_27() -> Training {
     let mut t = base_training();
     t.gc_content = 0.554000;
@@ -15840,7 +15840,7 @@ fn preset_27() -> Training {
     t
 }
 
-static PRESET_28: OnceLock<Training> = OnceLock::new();
+static PRESET_28: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_28() -> Training {
     let mut t = base_training();
     t.gc_content = 0.495000;
@@ -16398,7 +16398,7 @@ fn preset_28() -> Training {
     t
 }
 
-static PRESET_29: OnceLock<Training> = OnceLock::new();
+static PRESET_29: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_29() -> Training {
     let mut t = base_training();
     t.gc_content = 0.455000;
@@ -16974,7 +16974,7 @@ fn preset_29() -> Training {
     t
 }
 
-static PRESET_30: OnceLock<Training> = OnceLock::new();
+static PRESET_30: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_30() -> Training {
     let mut t = base_training();
     t.gc_content = 0.578000;
@@ -17526,7 +17526,7 @@ fn preset_30() -> Training {
     t
 }
 
-static PRESET_31: OnceLock<Training> = OnceLock::new();
+static PRESET_31: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_31() -> Training {
     let mut t = base_training();
     t.gc_content = 0.614000;
@@ -18084,7 +18084,7 @@ fn preset_31() -> Training {
     t
 }
 
-static PRESET_32: OnceLock<Training> = OnceLock::new();
+static PRESET_32: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_32() -> Training {
     let mut t = base_training();
     t.gc_content = 0.305000;
@@ -18640,7 +18640,7 @@ fn preset_32() -> Training {
     t
 }
 
-static PRESET_33: OnceLock<Training> = OnceLock::new();
+static PRESET_33: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_33() -> Training {
     let mut t = base_training();
     t.gc_content = 0.530000;
@@ -19196,7 +19196,7 @@ fn preset_33() -> Training {
     t
 }
 
-static PRESET_34: OnceLock<Training> = OnceLock::new();
+static PRESET_34: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_34() -> Training {
     let mut t = base_training();
     t.gc_content = 0.507000;
@@ -19748,7 +19748,7 @@ fn preset_34() -> Training {
     t
 }
 
-static PRESET_35: OnceLock<Training> = OnceLock::new();
+static PRESET_35: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_35() -> Training {
     let mut t = base_training();
     t.gc_content = 0.514000;
@@ -20319,7 +20319,7 @@ fn preset_35() -> Training {
     t
 }
 
-static PRESET_36: OnceLock<Training> = OnceLock::new();
+static PRESET_36: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_36() -> Training {
     let mut t = base_training();
     t.gc_content = 0.661000;
@@ -20876,7 +20876,7 @@ fn preset_36() -> Training {
     t
 }
 
-static PRESET_37: OnceLock<Training> = OnceLock::new();
+static PRESET_37: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_37() -> Training {
     let mut t = base_training();
     t.gc_content = 0.585000;
@@ -21431,7 +21431,7 @@ fn preset_37() -> Training {
     t
 }
 
-static PRESET_38: OnceLock<Training> = OnceLock::new();
+static PRESET_38: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_38() -> Training {
     let mut t = base_training();
     t.gc_content = 0.651000;
@@ -21987,7 +21987,7 @@ fn preset_38() -> Training {
     t
 }
 
-static PRESET_39: OnceLock<Training> = OnceLock::new();
+static PRESET_39: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_39() -> Training {
     let mut t = base_training();
     t.gc_content = 0.324000;
@@ -22543,7 +22543,7 @@ fn preset_39() -> Training {
     t
 }
 
-static PRESET_40: OnceLock<Training> = OnceLock::new();
+static PRESET_40: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_40() -> Training {
     let mut t = base_training();
     t.gc_content = 0.537000;
@@ -23097,7 +23097,7 @@ fn preset_40() -> Training {
     t
 }
 
-static PRESET_41: OnceLock<Training> = OnceLock::new();
+static PRESET_41: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_41() -> Training {
     let mut t = base_training();
     t.gc_content = 0.512000;
@@ -23654,7 +23654,7 @@ fn preset_41() -> Training {
     t
 }
 
-static PRESET_42: OnceLock<Training> = OnceLock::new();
+static PRESET_42: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_42() -> Training {
     let mut t = base_training();
     t.gc_content = 0.592000;
@@ -24210,7 +24210,7 @@ fn preset_42() -> Training {
     t
 }
 
-static PRESET_43: OnceLock<Training> = OnceLock::new();
+static PRESET_43: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_43() -> Training {
     let mut t = base_training();
     t.gc_content = 0.585000;
@@ -24767,7 +24767,7 @@ fn preset_43() -> Training {
     t
 }
 
-static PRESET_44: OnceLock<Training> = OnceLock::new();
+static PRESET_44: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_44() -> Training {
     let mut t = base_training();
     t.gc_content = 0.399000;
@@ -25321,7 +25321,7 @@ fn preset_44() -> Training {
     t
 }
 
-static PRESET_45: OnceLock<Training> = OnceLock::new();
+static PRESET_45: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_45() -> Training {
     let mut t = base_training();
     t.gc_content = 0.528000;
@@ -25877,7 +25877,7 @@ fn preset_45() -> Training {
     t
 }
 
-static PRESET_46: OnceLock<Training> = OnceLock::new();
+static PRESET_46: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_46() -> Training {
     let mut t = base_training();
     t.gc_content = 0.463000;
@@ -26432,7 +26432,7 @@ fn preset_46() -> Training {
     t
 }
 
-static PRESET_47: OnceLock<Training> = OnceLock::new();
+static PRESET_47: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_47() -> Training {
     let mut t = base_training();
     t.gc_content = 0.442000;
@@ -26988,7 +26988,7 @@ fn preset_47() -> Training {
     t
 }
 
-static PRESET_48: OnceLock<Training> = OnceLock::new();
+static PRESET_48: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_48() -> Training {
     let mut t = base_training();
     t.gc_content = 0.518000;
@@ -27543,7 +27543,7 @@ fn preset_48() -> Training {
     t
 }
 
-static PRESET_49: OnceLock<Training> = OnceLock::new();
+static PRESET_49: OnceLock<Arc<Training>> = OnceLock::new();
 fn preset_49() -> Training {
     let mut t = base_training();
     t.gc_content = 0.384000;
@@ -28155,57 +28155,64 @@ pub fn get_preset_training(id: usize) -> Option<Training> {
 }
 
 pub fn get_preset_training_ref(id: usize) -> Option<&'static Training> {
+    get_preset_training_shared(id).map(|training| &**training)
+}
+
+/// The training of preset `id` behind the reference count it is kept
+/// under, so that every result of the preset can share it instead of
+/// holding a copy.
+pub fn get_preset_training_shared(id: usize) -> Option<&'static Arc<Training>> {
     match id {
-        0 => Some(PRESET_0.get_or_init(preset_0)),
-        1 => Some(PRESET_1.get_or_init(preset_1)),
-        2 => Some(PRESET_2.get_or_init(preset_2)),
-        3 => Some(PRESET_3.get_or_init(preset_3)),
-        4 => Some(PRESET_4.get_or_init(preset_4)),
-        5 => Some(PRESET_5.get_or_init(preset_5)),
-        6 => Some(PRESET_6.get_or_init(preset_6)),
-        7 => Some(PRESET_7.get_or_init(preset_7)),
-        8 => Some(PRESET_8.get_or_init(preset_8)),
-        9 => Some(PRESET_9.get_or_init(preset_9)),
-        10 => Some(PRESET_10.get_or_init(preset_10)),
-        11 => Some(PRESET_11.get_or_init(preset_11)),
-        12 => Some(PRESET_12.get_or_init(preset_12)),
-        13 => Some(PRESET_13.get_or_init(preset_13)),
-        14 => Some(PRESET_14.get_or_init(preset_14)),
-        15 => Some(PRESET_15.get_or_init(preset_15)),
-        16 => Some(PRESET_16.get_or_init(preset_16)),
-        17 => Some(PRESET_17.get_or_init(preset_17)),
-        18 => Some(PRESET_18.get_or_init(preset_18)),
-        19 => Some(PRESET_19.get_or_init(preset_19)),
-        20 => Some(PRESET_20.get_or_init(preset_20)),
-        21 => Some(PRESET_21.get_or_init(preset_21)),
-        22 => Some(PRESET_22.get_or_init(preset_22)),
-        23 => Some(PRESET_23.get_or_init(preset_23)),
-        24 => Some(PRESET_24.get_or_init(preset_24)),
-        25 => Some(PRESET_25.get_or_init(preset_25)),
-        26 => Some(PRESET_26.get_or_init(preset_26)),
-        27 => Some(PRESET_27.get_or_init(preset_27)),
-        28 => Some(PRESET_28.get_or_init(preset_28)),
-        29 => Some(PRESET_29.get_or_init(preset_29)),
-        30 => Some(PRESET_30.get_or_init(preset_30)),
-        31 => Some(PRESET_31.get_or_init(preset_31)),
-        32 => Some(PRESET_32.get_or_init(preset_32)),
-        33 => Some(PRESET_33.get_or_init(preset_33)),
-        34 => Some(PRESET_34.get_or_init(preset_34)),
-        35 => Some(PRESET_35.get_or_init(preset_35)),
-        36 => Some(PRESET_36.get_or_init(preset_36)),
-        37 => Some(PRESET_37.get_or_init(preset_37)),
-        38 => Some(PRESET_38.get_or_init(preset_38)),
-        39 => Some(PRESET_39.get_or_init(preset_39)),
-        40 => Some(PRESET_40.get_or_init(preset_40)),
-        41 => Some(PRESET_41.get_or_init(preset_41)),
-        42 => Some(PRESET_42.get_or_init(preset_42)),
-        43 => Some(PRESET_43.get_or_init(preset_43)),
-        44 => Some(PRESET_44.get_or_init(preset_44)),
-        45 => Some(PRESET_45.get_or_init(preset_45)),
-        46 => Some(PRESET_46.get_or_init(preset_46)),
-        47 => Some(PRESET_47.get_or_init(preset_47)),
-        48 => Some(PRESET_48.get_or_init(preset_48)),
-        49 => Some(PRESET_49.get_or_init(preset_49)),
+        0 => Some(PRESET_0.get_or_init(|| Arc::new(preset_0()))),
+        1 => Some(PRESET_1.get_or_init(|| Arc::new(preset_1()))),
+        2 => Some(PRESET_2.get_or_init(|| Arc::new(preset_2()))),
+        3 => Some(PRESET_3.get_or_init(|| Arc::new(preset_3()))),
+        4 => Some(PRESET_4.get_or_init(|| Arc::new(preset_4()))),
+        5 => Some(PRESET_5.get_or_init(|| Arc::new(preset_5()))),
+        6 => Some(PRESET_6.get_or_init(|| Arc::new(preset_6()))),
+        7 => Some(PRESET_7.get_or_init(|| Arc::new(preset_7()))),
+        8 => Some(PRESET_8.get_or_init(|| Arc::new(preset_8()))),
+        9 => Some(PRESET_9.get_or_init(|| Arc::new(preset_9()))),
+        10 => Some(PRESET_10.get_or_init(|| Arc::new(preset_10()))),
+        11 => Some(PRESET_11.get_or_init(|| Arc::new(preset_11()))),
+        12 => Some(PRESET_12.get_or_init(|| Arc::new(preset_12()))),
+        13 => Some(PRESET_13.get_or_init(|| Arc::new(preset_13()))),
+        14 => Some(PRESET_14.get_or_init(|| Arc::new(preset_14()))),
+        15 => Some(PRESET_15.get_or_init(|| Arc::new(preset_15()))),
+        16 => Some(PRESET_16.get_or_init(|| Arc::new(preset_16()))),
+        17 => Some(PRESET_17.get_or_init(|| Arc::new(preset_17()))),
+        18 => Some(PRESET_18.get_or_init(|| Arc::new(preset_18()))),
+        19 => Some(PRESET_19.get_or_init(|| Arc::new(preset_19()))),
+        20 => Some(PRESET_20.get_or_init(|| Arc::new(preset_20()))),
+        21 => Some(PRESET_21.get_or_init(|| Arc::new(preset_21()))),
+        22 => Some(PRESET_22.get_or_init(|| Arc::new(preset_22()))),
+        23 => Some(PRESET_23.get_or_init(|| Arc::new(preset_23()))),
+        24 => Some(PRESET_24.get_or_init(|| Arc::new(preset_24()))),
+        25 => Some(PRESET_25.get_or_init(|| Arc::new(preset_25()))),
+        26 => Some(PRESET_26.get_or_init(|| Arc::new(preset_26()))),
+        27 => Some(PRESET_27.get_or_init(|| Arc::new(preset_27()))),
+        28 => Some(PRESET_28.get_or_init(|| Arc::new(preset_28()))),
+        29 => Some(PRESET_29.get_or_init(|| Arc::new(preset_29()))),
+        30 => Some(PRESET_30.get_or_init(|| Arc::new(preset_30()))),
+        31 => Some(PRESET_31.get_or_init(|| Arc::new(preset_31()))),
+        32 => Some(PRESET_32.get_or_init(|| Arc::new(preset_32()))),
+        33 => Some(PRESET_33.get_or_init(|| Arc::new(preset_33()))),
+        34 => Some(PRESET_34.get_or_init(|| Arc::new(preset_34()))),
+        35 => Some(PRESET_35.get_or_init(|| Arc::new(preset_35()))),
+        36 => Some(PRESET_36.get_or_init(|| Arc::new(preset_36()))),
+        37 => Some(PRESET_37.get_or_init(|| Arc::new(preset_37()))),
+        38 => Some(PRESET_38.get_or_init(|| Arc::new(preset_38()))),
+        39 => Some(PRESET_39.get_or_init(|| Arc::new(preset_39()))),
+        40 => Some(PRESET_40.get_or_init(|| Arc::new(preset_40()))),
+        41 => Some(PRESET_41.get_or_init(|| Arc::new(preset_41()))),
+        42 => Some(PRESET_42.get_or_init(|| Arc::new(preset_42()))),
+        43 => Some(PRESET_43.get_or_init(|| Arc::new(preset_43()))),
+        44 => Some(PRESET_44.get_or_init(|| Arc::new(preset_44()))),
+        45 => Some(PRESET_45.get_or_init(|| Arc::new(preset_45()))),
+        46 => Some(PRESET_46.get_or_init(|| Arc::new(preset_46()))),
+        47 => Some(PRESET_47.get_or_init(|| Arc::new(preset_47()))),
+        48 => Some(PRESET_48.get_or_init(|| Arc::new(preset_48()))),
+        49 => Some(PRESET_49.get_or_init(|| Arc::new(preset_49()))),
         _ => None,
     }
 }

@@ -7,8 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `OrphosAnalyzer::analyze_sequences` analyzes the records of one input in
+  order, numbering them; `analyze_fasta_file` and the Python and
+  WebAssembly bindings go through it.
+- `OrphosAnalyzer::analyze_numbered_sequence` analyzes one sequence under a
+  given number, for callers that read an input one sequence at a time.
+- `SequenceInfo::number`, the number of a sequence in its input, counted
+  from 1. Code that builds a `SequenceInfo` has to set it.
+- `output::write_all_results` writes the results of the sequences of one
+  input as one output; the command line and the bindings use it.
+
+### Fixed
+
+- The sequences of a multi-sequence input are numbered as Prodigal numbers
+  them. Every sequence used to be number 1, so the genes of every sequence
+  were `1_1`, `1_2`, ... and every GFF sequence header said `seqnum=1`; the
+  first gene of the second sequence is now `2_1` and its header `seqnum=2`.
+  This shows in GFF output and in the name column of BED output. Output for
+  a single sequence is unchanged.
+- GFF output of several sequences has one `##gff-version` line, at the top,
+  instead of one per sequence (`write_all_results`; `write_results` still
+  writes one sequence as a complete output).
+- A sequence of one or two bases no longer hangs node creation when ends
+  are open, as they are by default.
+- With `-m`, a run of `N` that lasts to the end of a sequence is not masked,
+  as in Prodigal, which records a run when it reads the base after it;
+  genes reaching into such a run were dropped.
+- A start codon of the reverse strand within twenty bases of the end of the
+  sequence is given the Shine-Dalgarno motifs Prodigal finds for it;
+  Prodigal also searches from positions past the end there, and such a
+  search can find a motif that no other does.
+- In metagenomic mode a sequence in which no preset model finds a gene is
+  reported under the first model tried for its GC content, as in Prodigal,
+  instead of under model 0.
+- Tests compare the GFF output with files written by a build of Prodigal's
+  master branch, line by line, for inputs of many short sequences, runs of
+  `N`, closed ends, masking and translation table 4
+  (`tests/prodigal_reference_outputs.rs`).
+
 ### Changed
 
+- **Breaking:** `OrphosResults::training_used` is an `Arc<Training>`
+  instead of a `Training`. A model is half a megabyte and every result held
+  its own copy, so 400 contigs held 250 MB and a large metagenome could not
+  fit in memory; in metagenomic mode the results of a preset now share its
+  model (24 MB for the same 400 contigs). Reading the model is unchanged;
+  code that builds an `OrphosResults` wraps the model in an `Arc`, and code
+  that changes it goes through `Arc::make_mut`.
+  `metagenomic::get_preset_training_shared` returns a preset's shared model.
+- Metagenomic mode no longer rebuilds the Shine-Dalgarno motif table for
+  every preset model of every sequence; the table depends on the model
+  alone and is now built once per model, from the 64 patterns of matching
+  bases instead of the 4096 6-mers. The same holds for the gene length
+  factors of a model and the codon table of a genetic code, and the motifs
+  upstream of the start codons are read once per sequence rather than once
+  per model. A metagenome of 400 contigs of 1 to 8 kb is predicted in 0.29 s
+  instead of 4.9 s on one thread, and in 0.05 s instead of 0.63 s on ten.
+- In metagenomic mode the preset models of a long sequence are scored on
+  several threads, each on its own copy of the nodes, with at most 256 MB of
+  copies at a time over all sequences: *E. coli* K-12 takes 0.55 s instead
+  of 2.2 s on ten threads, and 530 MB instead of 245 MB. Sequences of fewer
+  than 4096 nodes, and runs on one thread, are scored as before.
+- Single-genome prediction is about twice as fast, on one thread and on
+  many (*E. coli* K-12: 0.22 s instead of 0.39 s on one thread, 0.15 s
+  instead of 0.29 s on ten), and uses less memory. The dynamic programming
+  visits only the sources that can connect to a target: the latest ones for
+  the connections that reach back a bounded distance, the reverse stops
+  whose open reading frame is still open, and for the 3'-to-3' connections
+  across strands the few sources that can overlap a gene, the rest being
+  resolved by a sliding-window maximum. Node positions are created and
+  sorted on their own, and every node is then written once; the strand
+  scans visit only start and stop codons; the raw coding scores computed
+  for training are kept for the prediction instead of being computed
+  twice; the GC frame plot is kept as running totals per codon, so the GC
+  bias of a node is a subtraction instead of a walk over its codons; the
+  ORF GC content counts bases 32 at a time; and the coding score reads one
+  codon per step and remembers the length factor of each gene length.
+- Start training without Shine-Dalgarno motifs is about three times as
+  fast, so that *M. genitalium* is predicted in 0.047 s instead of 0.11 s:
+  it searched the motifs of every start node twice per iteration, and now
+  once, on compact copies of the nodes and of the sequence windows the
+  searches read.
+- None of the above changes the output.
 - Gene prediction on a single genome reuses the nodes training created and
   sorted, with their scores reset, instead of creating and sorting them a
   second time; nodes are sorted in place instead of being gathered into a

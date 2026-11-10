@@ -1,12 +1,13 @@
+use std::sync::OnceLock;
+
 use bio::bio_types::strand::Strand;
 
 use crate::{
-    constants::{
-        CODON_LENGTH, MINIMUM_EDGE_GENE_LENGTH, MINIMUM_GENE_LENGTH, READING_FRAMES, STT_NOD,
-    },
+    constants::{CODON_LENGTH, MINIMUM_EDGE_GENE_LENGTH, MINIMUM_GENE_LENGTH, READING_FRAMES},
     node::validation::{
         check_start_codon, is_edge_gene, is_reverse_edge_gene, is_valid_gene, is_valid_reverse_gene,
     },
+    parallel,
     sequence::{encoded::EncodedSequence, is_stop},
     types::{CodonType, Mask, Node, NodePosition, OrphosError, Training},
 };
@@ -56,12 +57,14 @@ impl StrandProcessingContext {
             self.minimum_distances[i % READING_FRAMES] = MINIMUM_EDGE_GENE_LENGTH; // Uses i%3 for min_dist
 
             if !self.closed && self.sequence_length > 0 {
-                while self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES] + 2
-                    > self.sequence_length - 1
-                {
-                    self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES] = self
-                        .last_stop_positions[(i + sequence_length_mod) % READING_FRAMES]
-                        .saturating_sub(3);
+                // Back to the last codon that fits in the sequence. A
+                // sequence of one or two bases holds none: the position
+                // stops at zero, where Prodigal's goes below it.
+                let last_base = self.sequence_length - 1;
+                let last_stop =
+                    &mut self.last_stop_positions[(i + sequence_length_mod) % READING_FRAMES];
+                while *last_stop + 2 > last_base && *last_stop > 0 {
+                    *last_stop = last_stop.saturating_sub(3);
                 }
             }
         }
@@ -127,6 +130,7 @@ impl CodonTables {
 /// Entry layout: bits 0..4 flag stop codons starting at base 0..3 of the
 /// byte, bits 4..8 flag start codons, and bits 8..16 hold the start codon
 /// type index (two bits per base) for the flagged starts.
+#[derive(Clone)]
 struct ByteCodonTable {
     entries: Vec<u16>,
 }
@@ -162,6 +166,23 @@ impl ByteCodonTable {
         Self { entries }
     }
 
+    /// The table for the translation table of `training`, which is all the
+    /// classification of a codon depends on. The tables of the genetic codes
+    /// are built once each: for a short sequence, building one costs more
+    /// than scanning the sequence with it.
+    fn for_training(training: &Training) -> std::borrow::Cow<'static, Self> {
+        static TABLES: [OnceLock<ByteCodonTable>; 34] = [const { OnceLock::new() }; 34];
+
+        let build = || Self::new(&CodonTables::new(training));
+        match usize::try_from(training.translation_table)
+            .ok()
+            .and_then(|translation_table| TABLES.get(translation_table))
+        {
+            Some(table) => std::borrow::Cow::Borrowed(table.get_or_init(build)),
+            None => std::borrow::Cow::Owned(build()),
+        }
+    }
+
     /// Entry for the byte at `byte_index`; bases past the end of the buffer
     /// read as zero, which only affects codons past the scanned range.
     #[inline]
@@ -169,6 +190,14 @@ impl ByteCodonTable {
         let low = usize::from(encoded_sequence[byte_index]);
         let high = usize::from(encoded_sequence.get(byte_index + 1).copied().unwrap_or(0));
         self.entries[(low | (high << 8)) & (Self::KEY_COUNT - 1)]
+    }
+
+    /// One bit per base of the byte, up to base `last_offset`, at which a
+    /// stop or start codon starts.
+    #[inline]
+    fn codon_offsets(entry: u16, last_offset: usize) -> u16 {
+        ((entry >> Self::STOP_SHIFT) | (entry >> Self::START_SHIFT))
+            & ((1 << (last_offset + 1)) - 1)
     }
 
     #[inline]
@@ -215,24 +244,117 @@ pub fn add_nodes(
     circular: bool,
     training: &Training,
 ) -> Result<usize, OrphosError> {
-    let sequence_length = encoded_sequence.sequence_length;
-    // Clear the nodes vector
-    nodes.clear();
-    // Enough for the start and stop codons of a typical genome (one node
-    // every twenty bases or so), so the vector rarely has to grow and copy.
-    nodes.reserve(STT_NOD.max(sequence_length / 16));
+    let (forward, reverse) = strand_node_positions(encoded_sequence, closed, circular, training);
 
+    nodes.clear();
+    nodes.reserve(forward.len() + reverse.len());
+    nodes.extend(forward.into_iter().chain(reverse).map(node_at));
+
+    Ok(nodes.len())
+}
+
+/// [`add_nodes`] followed by `sort_nodes_by_position`: the same nodes in the
+/// same order.
+///
+/// A node is several cache lines of scores and state around a small
+/// position, so the positions are created and sorted on their own and every
+/// node is then written once, in its final place, instead of being created
+/// in scan order and moved while sorting.
+pub(crate) fn add_sorted_nodes(
+    encoded_sequence: &EncodedSequence,
+    nodes: &mut Vec<Node>,
+    closed: bool,
+    circular: bool,
+    training: &Training,
+) -> Result<usize, OrphosError> {
+    let (mut forward, mut reverse) =
+        strand_node_positions(encoded_sequence, closed, circular, training);
+
+    // `sort_nodes_by_position` orders by position, then strand (forward
+    // first), then creation order. Sorting each strand's positions stably
+    // and merging the two, forward first on equal positions, is that order.
+    parallel::join(
+        || sort_strand_positions(&mut forward, Strand::Forward),
+        || sort_strand_positions(&mut reverse, Strand::Reverse),
+    );
+
+    nodes.clear();
+    nodes.reserve(forward.len() + reverse.len());
+    let mut reverse = reverse.into_iter().peekable();
+    for position in forward {
+        while let Some(reverse_position) = reverse.next_if(|next| next.index < position.index) {
+            nodes.push(node_at(reverse_position));
+        }
+        nodes.push(node_at(position));
+    }
+    nodes.extend(reverse.map(node_at));
+
+    Ok(nodes.len())
+}
+
+/// A node at `position` with every score and state field at its default.
+#[inline]
+fn node_at(position: NodePosition) -> Node {
+    Node {
+        position,
+        ..Node::default()
+    }
+}
+
+/// Sort the node positions of one strand by sequence position, keeping the
+/// creation order of equal positions.
+///
+/// The forward strand is scanned from the end of the sequence, so its
+/// positions are created in roughly decreasing order, and the reverse
+/// strand's in roughly increasing order (a stop node is created only when
+/// the scan reaches the next stop of its frame). The stable sort merges the
+/// runs it finds, so an almost sorted input costs little.
+fn sort_strand_positions(positions: &mut [NodePosition], strand: Strand) {
+    if strand == Strand::Forward {
+        // Reversing turns the decreasing runs into increasing ones; equal
+        // positions are put back in creation order afterwards.
+        positions.reverse();
+        positions.sort_by_key(|position| position.index);
+        let mut start = 0;
+        while start < positions.len() {
+            let index = positions[start].index;
+            let mut end = start + 1;
+            while end < positions.len() && positions[end].index == index {
+                end += 1;
+            }
+            positions[start..end].reverse();
+            start = end;
+        }
+    } else {
+        positions.sort_by_key(|position| position.index);
+    }
+}
+
+/// The positions of the nodes of the forward strand and of the reverse
+/// strand, each in the order the strand's scan creates them.
+fn strand_node_positions(
+    encoded_sequence: &EncodedSequence,
+    closed: bool,
+    circular: bool,
+    training: &Training,
+) -> (Vec<NodePosition>, Vec<NodePosition>) {
+    let sequence_length = encoded_sequence.sequence_length;
     let sequence_length_mod = sequence_length % READING_FRAMES;
 
-    let codon_tables = ByteCodonTable::new(&CodonTables::new(training));
+    let codon_tables = ByteCodonTable::for_training(training);
+    // Enough for the start and stop codons of a typical genome (one node
+    // every twenty bases or so over the two strands), so the vectors rarely
+    // have to grow and copy.
+    let capacity = sequence_length / 32 + 16;
 
-    let create_forward_nodes = |nodes: &mut Vec<Node>| {
+    let create_forward_nodes = || {
+        let mut nodes = Vec::with_capacity(capacity);
         let mut context =
             StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
         context.seed_circular_stops(&encoded_sequence.forward_sequence, training);
         process_forward_strand(
             &encoded_sequence.forward_sequence,
-            nodes,
+            &mut nodes,
             &mut context,
             &encoded_sequence.masks,
             training,
@@ -240,19 +362,21 @@ pub fn add_nodes(
         );
         handle_remaining_starts(
             &encoded_sequence.forward_sequence,
-            nodes,
+            &mut nodes,
             &context,
             Strand::Forward,
             training,
         );
+        nodes
     };
-    let create_reverse_nodes = |nodes: &mut Vec<Node>| {
+    let create_reverse_nodes = || {
+        let mut nodes = Vec::with_capacity(capacity);
         let mut context =
             StrandProcessingContext::new(sequence_length, sequence_length_mod, closed, circular);
         context.seed_circular_stops(&encoded_sequence.reverse_complement_sequence, training);
         process_reverse_strand(
             &encoded_sequence.reverse_complement_sequence,
-            nodes,
+            &mut nodes,
             &mut context,
             &encoded_sequence.masks,
             training,
@@ -260,35 +384,17 @@ pub fn add_nodes(
         );
         handle_remaining_starts(
             &encoded_sequence.reverse_complement_sequence,
-            nodes,
+            &mut nodes,
             &context,
             Strand::Reverse,
             training,
         );
+        nodes
     };
 
-    // The two strands are independent. With two threads or more, their
-    // nodes are created at the same time, the reverse strand's in a vector
-    // of its own that is appended afterwards (sorting follows, so the order
-    // within the vector does not matter beyond that). On one thread the
-    // copy that the append is would be a waste, so both strands' nodes go
-    // straight into `nodes`.
-    if rayon::current_num_threads() > 1 {
-        let (_, mut reverse_nodes) = rayon::join(
-            || create_forward_nodes(nodes),
-            || {
-                let mut reverse_nodes = Vec::with_capacity(STT_NOD.max(sequence_length / 32));
-                create_reverse_nodes(&mut reverse_nodes);
-                reverse_nodes
-            },
-        );
-        nodes.append(&mut reverse_nodes);
-    } else {
-        create_forward_nodes(nodes);
-        create_reverse_nodes(nodes);
-    }
-
-    Ok(nodes.len())
+    // The two strands are independent, so with two threads or more their
+    // nodes are created at the same time.
+    parallel::join(create_forward_nodes, create_reverse_nodes)
 }
 
 /// Process the forward strand to identify potential genes
@@ -297,7 +403,7 @@ pub fn add_nodes(
 /// and creating nodes for valid gene boundaries that meet length requirements.
 fn process_forward_strand(
     encoded_sequence: &[u8],
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<NodePosition>,
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
@@ -317,7 +423,7 @@ fn process_forward_strand(
         let entry = codon_tables.entry(encoded_sequence, byte_index);
         let first_position = byte_index * POSITIONS_PER_BYTE;
         let last_offset = (scanning_start_position - first_position).min(POSITIONS_PER_BYTE - 1);
-        if entry != 0 || first_position <= EDGE_POSITION_LIMIT {
+        if first_position <= EDGE_POSITION_LIMIT {
             for offset in (0..=last_offset).rev() {
                 let position_index = first_position + offset;
                 process_forward_position(
@@ -327,6 +433,24 @@ fn process_forward_strand(
                     masks,
                     training,
                     position_index,
+                    ByteCodonTable::is_stop(entry, offset),
+                    ByteCodonTable::start_type(entry, offset),
+                );
+            }
+        } else {
+            // Past the first positions only a stop or start codon changes
+            // anything, so only those positions are visited.
+            let mut codons = ByteCodonTable::codon_offsets(entry, last_offset);
+            while codons != 0 {
+                let offset = codons.ilog2() as usize;
+                codons &= !(1 << offset);
+                process_forward_position(
+                    encoded_sequence,
+                    nodes,
+                    context,
+                    masks,
+                    training,
+                    first_position + offset,
                     ByteCodonTable::is_stop(entry, offset),
                     ByteCodonTable::start_type(entry, offset),
                 );
@@ -346,7 +470,7 @@ const EDGE_POSITION_LIMIT: usize = 2;
 #[allow(clippy::too_many_arguments)]
 fn process_forward_position(
     encoded_sequence: &[u8],
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<NodePosition>,
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
@@ -415,7 +539,7 @@ fn process_forward_position(
 /// Process reverse strand to find genes
 fn process_reverse_strand(
     reverse_complement_encoded_sequence: &[u8],
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<NodePosition>,
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
@@ -431,7 +555,7 @@ fn process_reverse_strand(
         let entry = codon_tables.entry(reverse_complement_encoded_sequence, byte_index);
         let first_position = byte_index * POSITIONS_PER_BYTE;
         let last_offset = (scanning_start_position - first_position).min(POSITIONS_PER_BYTE - 1);
-        if entry != 0 || first_position <= EDGE_POSITION_LIMIT {
+        if first_position <= EDGE_POSITION_LIMIT {
             for offset in (0..=last_offset).rev() {
                 let position_index = first_position + offset;
                 process_reverse_position(
@@ -441,6 +565,22 @@ fn process_reverse_strand(
                     masks,
                     training,
                     position_index,
+                    ByteCodonTable::is_stop(entry, offset),
+                    ByteCodonTable::start_type(entry, offset),
+                );
+            }
+        } else {
+            let mut codons = ByteCodonTable::codon_offsets(entry, last_offset);
+            while codons != 0 {
+                let offset = codons.ilog2() as usize;
+                codons &= !(1 << offset);
+                process_reverse_position(
+                    reverse_complement_encoded_sequence,
+                    nodes,
+                    context,
+                    masks,
+                    training,
+                    first_position + offset,
                     ByteCodonTable::is_stop(entry, offset),
                     ByteCodonTable::start_type(entry, offset),
                 );
@@ -457,7 +597,7 @@ fn process_reverse_strand(
 #[allow(clippy::too_many_arguments)]
 fn process_reverse_position(
     reverse_complement_encoded_sequence: &[u8],
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<NodePosition>,
     context: &mut StrandProcessingContext,
     masks: &[Mask],
     training: &Training,
@@ -529,7 +669,7 @@ fn process_reverse_position(
 /// Handle remaining starts at the end of strand processing
 fn handle_remaining_starts(
     encoded_sequence: &[u8],
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<NodePosition>,
     context: &StrandProcessingContext,
     strand: Strand,
     training: &Training,
@@ -571,15 +711,12 @@ fn handle_remaining_starts(
                 Strand::Unknown => unreachable!("Unknown strand should not be processed"),
             };
 
-            nodes.push(Node {
-                position: NodePosition {
-                    index: position_index,
-                    codon_type: CodonType::Stop,
-                    strand,
-                    is_edge,
-                    stop_value,
-                },
-                ..Node::default()
+            nodes.push(NodePosition {
+                index: position_index,
+                codon_type: CodonType::Stop,
+                strand,
+                is_edge,
+                stop_value,
             });
         }
     }
@@ -592,18 +729,15 @@ fn create_stop_node(
     strand: Strand,
     encoded_sequence: &[u8],
     training: &Training,
-) -> Node {
+) -> NodePosition {
     let is_edge = !is_stop(encoded_sequence, index, training);
 
-    Node {
-        position: NodePosition {
-            index,
-            codon_type: CodonType::Stop,
-            strand,
-            is_edge,
-            stop_value,
-        },
-        ..Node::default()
+    NodePosition {
+        index,
+        codon_type: CodonType::Stop,
+        strand,
+        is_edge,
+        stop_value,
     }
 }
 
@@ -614,18 +748,15 @@ fn create_reverse_stop_node(
     sequence_length: usize,
     reverse_complement_encoded_sequence: &[u8],
     training: &Training,
-) -> Node {
+) -> NodePosition {
     let is_edge = !is_stop(reverse_complement_encoded_sequence, index, training);
 
-    Node {
-        position: NodePosition {
-            index: sequence_length - index - 1,
-            codon_type: CodonType::Stop,
-            strand: Strand::Reverse,
-            is_edge,
-            stop_value: sequence_length as isize - stop_value - 1,
-        },
-        ..Node::default()
+    NodePosition {
+        index: sequence_length - index - 1,
+        codon_type: CodonType::Stop,
+        strand: Strand::Reverse,
+        is_edge,
+        stop_value: sequence_length as isize - stop_value - 1,
     }
 }
 
@@ -635,16 +766,13 @@ fn create_start_node(
     codon_type: CodonType,
     stop_value: isize,
     strand: Strand,
-) -> Node {
-    Node {
-        position: NodePosition {
-            index: position_index,
-            codon_type,
-            strand,
-            is_edge: false,
-            stop_value,
-        },
-        ..Node::default()
+) -> NodePosition {
+    NodePosition {
+        index: position_index,
+        codon_type,
+        strand,
+        is_edge: false,
+        stop_value,
     }
 }
 
@@ -654,44 +782,39 @@ fn create_reverse_start_node(
     codon_type: CodonType,
     stop_value: isize,
     sequence_length: usize,
-) -> Node {
-    Node {
-        position: NodePosition {
-            index: sequence_length - position - 1,
-            codon_type,
-            strand: Strand::Reverse,
-            is_edge: false,
-            stop_value: sequence_length as isize - stop_value - 1,
-        },
-        ..Node::default()
+) -> NodePosition {
+    NodePosition {
+        index: sequence_length - position - 1,
+        codon_type,
+        strand: Strand::Reverse,
+        is_edge: false,
+        stop_value: sequence_length as isize - stop_value - 1,
     }
 }
 
 /// Create an edge node
-fn create_edge_node(index: usize, stop_value: isize, strand: Strand) -> Node {
-    Node {
-        position: NodePosition {
-            index,
-            codon_type: CodonType::Atg,
-            strand,
-            is_edge: true,
-            stop_value,
-        },
-        ..Node::default()
+fn create_edge_node(index: usize, stop_value: isize, strand: Strand) -> NodePosition {
+    NodePosition {
+        index,
+        codon_type: CodonType::Atg,
+        strand,
+        is_edge: true,
+        stop_value,
     }
 }
 
 /// Create a reverse edge node
-fn create_reverse_edge_node(position: usize, stop_value: isize, sequence_length: usize) -> Node {
-    Node {
-        position: NodePosition {
-            index: sequence_length - position - 1,
-            codon_type: CodonType::Atg,
-            strand: Strand::Reverse,
-            is_edge: true,
-            stop_value: sequence_length as isize - stop_value - 1,
-        },
-        ..Node::default()
+fn create_reverse_edge_node(
+    position: usize,
+    stop_value: isize,
+    sequence_length: usize,
+) -> NodePosition {
+    NodePosition {
+        index: sequence_length - position - 1,
+        codon_type: CodonType::Atg,
+        strand: Strand::Reverse,
+        is_edge: true,
+        stop_value: sequence_length as isize - stop_value - 1,
     }
 }
 
@@ -796,11 +919,11 @@ mod tests {
     fn test_create_start_node() {
         let node = create_start_node(100, CodonType::Atg, 200, Strand::Forward);
 
-        assert_eq!(node.position.index, 100);
-        assert_eq!(node.position.codon_type, CodonType::Atg);
-        assert_eq!(node.position.strand, Strand::Forward);
-        assert_eq!(node.position.stop_value, 200);
-        assert!(!node.position.is_edge);
+        assert_eq!(node.index, 100);
+        assert_eq!(node.codon_type, CodonType::Atg);
+        assert_eq!(node.strand, Strand::Forward);
+        assert_eq!(node.stop_value, 200);
+        assert!(!node.is_edge);
     }
 
     #[test]
@@ -808,25 +931,22 @@ mod tests {
         let sequence_length = 1000;
         let node = create_reverse_start_node(100, CodonType::Gtg, 200, sequence_length);
 
-        assert_eq!(node.position.index, sequence_length - 100 - 1);
-        assert_eq!(node.position.codon_type, CodonType::Gtg);
-        assert_eq!(node.position.strand, Strand::Reverse);
-        assert_eq!(
-            node.position.stop_value,
-            (sequence_length - 200 - 1) as isize
-        );
-        assert!(!node.position.is_edge);
+        assert_eq!(node.index, sequence_length - 100 - 1);
+        assert_eq!(node.codon_type, CodonType::Gtg);
+        assert_eq!(node.strand, Strand::Reverse);
+        assert_eq!(node.stop_value, (sequence_length - 200 - 1) as isize);
+        assert!(!node.is_edge);
     }
 
     #[test]
     fn test_create_edge_node() {
         let node = create_edge_node(50, 150, Strand::Forward);
 
-        assert_eq!(node.position.index, 50);
-        assert_eq!(node.position.codon_type, CodonType::Atg);
-        assert_eq!(node.position.strand, Strand::Forward);
-        assert_eq!(node.position.stop_value, 150);
-        assert!(node.position.is_edge);
+        assert_eq!(node.index, 50);
+        assert_eq!(node.codon_type, CodonType::Atg);
+        assert_eq!(node.strand, Strand::Forward);
+        assert_eq!(node.stop_value, 150);
+        assert!(node.is_edge);
     }
 
     #[test]
@@ -834,14 +954,11 @@ mod tests {
         let sequence_length = 1000;
         let node = create_reverse_edge_node(50, 150, sequence_length);
 
-        assert_eq!(node.position.index, sequence_length - 50 - 1);
-        assert_eq!(node.position.codon_type, CodonType::Atg);
-        assert_eq!(node.position.strand, Strand::Reverse);
-        assert_eq!(
-            node.position.stop_value,
-            (sequence_length - 150 - 1) as isize
-        );
-        assert!(node.position.is_edge);
+        assert_eq!(node.index, sequence_length - 50 - 1);
+        assert_eq!(node.codon_type, CodonType::Atg);
+        assert_eq!(node.strand, Strand::Reverse);
+        assert_eq!(node.stop_value, (sequence_length - 150 - 1) as isize);
+        assert!(node.is_edge);
     }
 
     #[test]
@@ -852,10 +969,10 @@ mod tests {
 
         let node = create_stop_node(0, 3, Strand::Forward, &encoded_seq, &training);
 
-        assert_eq!(node.position.index, 0);
-        assert_eq!(node.position.codon_type, CodonType::Stop);
-        assert_eq!(node.position.strand, Strand::Forward);
-        assert_eq!(node.position.stop_value, 3);
+        assert_eq!(node.index, 0);
+        assert_eq!(node.codon_type, CodonType::Stop);
+        assert_eq!(node.strand, Strand::Forward);
+        assert_eq!(node.stop_value, 3);
     }
 
     #[test]
@@ -867,10 +984,10 @@ mod tests {
 
         let node = create_reverse_stop_node(0, 3, sequence_length, &encoded_seq, &training);
 
-        assert_eq!(node.position.index, sequence_length - 1);
-        assert_eq!(node.position.codon_type, CodonType::Stop);
-        assert_eq!(node.position.strand, Strand::Reverse);
-        assert_eq!(node.position.stop_value, (sequence_length - 3 - 1) as isize);
+        assert_eq!(node.index, sequence_length - 1);
+        assert_eq!(node.codon_type, CodonType::Stop);
+        assert_eq!(node.strand, Strand::Reverse);
+        assert_eq!(node.stop_value, (sequence_length - 3 - 1) as isize);
     }
 
     #[test]
@@ -894,8 +1011,8 @@ mod tests {
         );
 
         assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0].position.strand, Strand::Forward);
-        assert_eq!(nodes[1].position.strand, Strand::Forward);
+        assert_eq!(nodes[0].strand, Strand::Forward);
+        assert_eq!(nodes[1].strand, Strand::Forward);
     }
 
     #[test]
@@ -919,7 +1036,7 @@ mod tests {
         );
 
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].position.strand, Strand::Reverse);
+        assert_eq!(nodes[0].strand, Strand::Reverse);
     }
 
     #[test]
@@ -943,6 +1060,163 @@ mod tests {
         );
 
         assert!(nodes.is_empty());
+    }
+
+    /// Deterministic sequences for the scan comparisons: mostly random
+    /// bases, rich in G and C, with some runs of `N`.
+    fn pseudo_random_sequence(seed: u64, length: usize) -> Vec<u8> {
+        let mut random = crate::test_random::XorShift(seed);
+        let mut next = || random.next();
+        let mut sequence = Vec::with_capacity(length);
+        while sequence.len() < length {
+            if next() % 400 == 0 {
+                let run = 1 + (next() % 60) as usize;
+                sequence.extend(std::iter::repeat_n(b'N', run.min(length - sequence.len())));
+            } else {
+                // Two thirds G and C: fewer stop codons, longer open
+                // reading frames, more nodes.
+                sequence.push(b"ACGGCT"[(next() % 6) as usize]);
+            }
+        }
+        sequence
+    }
+
+    /// The node positions of both strands, found by looking at every
+    /// position of each strand, from its last codon to its first, as
+    /// Prodigal does.
+    fn positions_scanning_every_base(
+        encoded_sequence: &EncodedSequence,
+        closed: bool,
+        circular: bool,
+        training: &Training,
+    ) -> (Vec<NodePosition>, Vec<NodePosition>) {
+        let sequence_length = encoded_sequence.sequence_length;
+        let scan = |strand: Strand| {
+            let strand_sequence = match strand {
+                Strand::Forward => &encoded_sequence.forward_sequence,
+                _ => &encoded_sequence.reverse_complement_sequence,
+            };
+            let mut positions = Vec::new();
+            let mut context = StrandProcessingContext::new(
+                sequence_length,
+                sequence_length % READING_FRAMES,
+                closed,
+                circular,
+            );
+            context.seed_circular_stops(strand_sequence, training);
+            if sequence_length >= CODON_LENGTH {
+                for position in (0..=sequence_length - CODON_LENGTH).rev() {
+                    let is_stop_codon = is_stop(strand_sequence, position, training);
+                    let start_type = check_start_codon(strand_sequence, position, training);
+                    if strand == Strand::Forward {
+                        process_forward_position(
+                            strand_sequence,
+                            &mut positions,
+                            &mut context,
+                            &encoded_sequence.masks,
+                            training,
+                            position,
+                            is_stop_codon,
+                            start_type,
+                        );
+                    } else {
+                        process_reverse_position(
+                            strand_sequence,
+                            &mut positions,
+                            &mut context,
+                            &encoded_sequence.masks,
+                            training,
+                            position,
+                            is_stop_codon,
+                            start_type,
+                        );
+                    }
+                }
+            }
+            handle_remaining_starts(strand_sequence, &mut positions, &context, strand, training);
+            positions
+        };
+        (scan(Strand::Forward), scan(Strand::Reverse))
+    }
+
+    #[test]
+    fn strand_scans_find_the_nodes_of_a_scan_of_every_base() {
+        let mut compared = 0;
+        // Lengths of every residue modulo 4 (bases per byte) and 3.
+        for (seed, length) in [(1u64, 3000usize), (2, 3001), (3, 3002), (4, 3003), (5, 407)] {
+            let sequence = pseudo_random_sequence(seed, length);
+            for mask in [false, true] {
+                let encoded = if mask {
+                    EncodedSequence::with_masking(&sequence)
+                } else {
+                    EncodedSequence::without_masking(&sequence)
+                };
+                for translation_table in [11, 4] {
+                    let training = Training {
+                        translation_table,
+                        ..create_test_training()
+                    };
+                    for (closed, circular) in [(false, false), (true, false), (false, true)] {
+                        let expected =
+                            positions_scanning_every_base(&encoded, closed, circular, &training);
+                        let actual = strand_node_positions(&encoded, closed, circular, &training);
+                        assert_eq!(
+                            format!("{expected:?}"),
+                            format!("{actual:?}"),
+                            "seed {seed}, mask {mask}, table {translation_table}, \
+                             closed {closed}, circular {circular}"
+                        );
+                        compared += expected.0.len() + expected.1.len();
+                    }
+                }
+            }
+        }
+        assert!(compared > 5_000, "only {compared} nodes compared");
+    }
+
+    #[test]
+    fn sorted_nodes_are_the_added_nodes_sorted() {
+        use crate::node::sort_nodes_by_position;
+
+        for (seed, length) in [(11u64, 5000usize), (12, 5001), (13, 5002)] {
+            let sequence = pseudo_random_sequence(seed, length);
+            let encoded = EncodedSequence::with_masking(&sequence);
+            let training = create_test_training();
+            for (closed, circular) in [(false, false), (true, false), (false, true)] {
+                let mut expected = Vec::new();
+                add_nodes(&encoded, &mut expected, closed, circular, &training).unwrap();
+                sort_nodes_by_position(&mut expected);
+
+                // The vector is reused, as between the models of the
+                // metagenomic mode.
+                let mut actual = vec![Node::default(); 7];
+                let count =
+                    add_sorted_nodes(&encoded, &mut actual, closed, circular, &training).unwrap();
+
+                assert_eq!(count, expected.len());
+                assert!(count > 100, "only {count} nodes");
+                assert_eq!(
+                    format!("{expected:?}"),
+                    format!("{actual:?}"),
+                    "seed {seed}, closed {closed}, circular {circular}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_add_nodes_sequence_shorter_than_a_codon() {
+        let training = create_test_training();
+        for sequence in [&b""[..], b"A", b"AC"] {
+            let encoded_sequence = create_test_encoded_sequence(sequence);
+            for (closed, circular) in [(false, false), (true, false), (false, true)] {
+                let mut nodes = vec![Node::default()];
+                let count =
+                    add_nodes(&encoded_sequence, &mut nodes, closed, circular, &training).unwrap();
+                assert_eq!(count, 0);
+                assert!(nodes.is_empty());
+            }
+        }
     }
 
     #[test]

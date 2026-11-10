@@ -59,7 +59,10 @@ mod formats {
 }
 
 use formats::{
-    bed::write_bed_format, gbk::write_gbk_format, gca::write_gca_format, gff::write_gff_format,
+    bed::write_bed_format,
+    gbk::write_gbk_format,
+    gca::write_gca_format,
+    gff::{write_gff_format, write_gff_sequence, write_gff_version},
     sco::write_sco_format,
 };
 
@@ -94,6 +97,11 @@ use formats::{
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+/// Writes the results of one sequence as a complete output of its own.
+///
+/// To write the results of the sequences of one input to one output, use
+/// [`write_all_results`]: a GFF file opens with a version line, which this
+/// function writes every time.
 pub fn write_results<W: Write>(
     writer: &mut W,
     results: &OrphosResults,
@@ -106,6 +114,45 @@ pub fn write_results<W: Write>(
         OutputFormat::Gca => write_gca_format(writer, results),
         OutputFormat::Bed => write_bed_format(writer, results),
     }
+}
+
+/// Writes the results of the sequences of one input, in order, as one
+/// output: what [`OrphosAnalyzer::analyze_sequences`] and
+/// [`OrphosAnalyzer::analyze_fasta_file`] return.
+///
+/// In GFF the version line is written once, ahead of the first sequence, as
+/// Prodigal writes it; in the other formats the sequences follow each other.
+///
+/// [`OrphosAnalyzer::analyze_sequences`]: crate::OrphosAnalyzer::analyze_sequences
+/// [`OrphosAnalyzer::analyze_fasta_file`]: crate::OrphosAnalyzer::analyze_fasta_file
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use orphos_core::{OrphosAnalyzer, config::{OrphosConfig, OutputFormat}};
+/// use orphos_core::output::write_all_results;
+///
+/// let analyzer = OrphosAnalyzer::new(OrphosConfig::default());
+/// let results = analyzer.analyze_fasta_file("contigs.fasta")?;
+///
+/// let mut output = std::fs::File::create("contigs.gff")?;
+/// write_all_results(&mut output, &results, OutputFormat::Gff)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn write_all_results<W: Write>(
+    writer: &mut W,
+    results: &[OrphosResults],
+    format: OutputFormat,
+) -> Result<(), OrphosError> {
+    if format == OutputFormat::Gff {
+        write_gff_version(writer)?;
+        return results
+            .iter()
+            .try_for_each(|sequence| write_gff_sequence(writer, sequence));
+    }
+    results
+        .iter()
+        .try_for_each(|sequence| write_results(writer, sequence, format))
 }
 
 #[cfg(test)]
@@ -122,6 +169,7 @@ mod tests {
     fn create_test_results() -> OrphosResults {
         OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "test_seq".to_string(),
                 length: 1000,
                 description: Some("Test sequence".to_string()),
@@ -141,7 +189,7 @@ mod tests {
                 },
                 ..Default::default()
             }],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         }
     }
@@ -245,6 +293,7 @@ mod tests {
     fn test_write_results_empty_genes() {
         let results = OrphosResults {
             sequence_info: SequenceInfo {
+                number: 1,
                 header: "empty_seq".to_string(),
                 length: 100,
                 description: None,
@@ -252,7 +301,7 @@ mod tests {
                 num_genes: 0,
             },
             genes: vec![],
-            training_used: Training::default(),
+            training_used: Training::default().into(),
             metagenomic_model: None,
         };
 
@@ -275,6 +324,38 @@ mod tests {
                 "Failed to write empty results for format: {:?}",
                 format
             );
+        }
+    }
+
+    #[test]
+    fn test_write_all_results_writes_the_gff_version_once() {
+        let mut second = create_test_results();
+        second.sequence_info.number = 2;
+        let results = [create_test_results(), second];
+
+        let mut together = Vec::new();
+        write_all_results(&mut together, &results, OutputFormat::Gff).unwrap();
+        let together = String::from_utf8(together).unwrap();
+        assert!(together.starts_with("##gff-version  3\n# Sequence Data: seqnum=1;"));
+        assert_eq!(together.matches("##gff-version").count(), 1);
+        assert!(together.contains("\n# Sequence Data: seqnum=2;"));
+
+        // A sequence written on its own is a complete GFF file, whatever
+        // its number.
+        let mut alone = Vec::new();
+        write_results(&mut alone, &results[1], OutputFormat::Gff).unwrap();
+        let alone = String::from_utf8(alone).unwrap();
+        assert!(alone.starts_with("##gff-version  3\n# Sequence Data: seqnum=2;"));
+
+        // The other formats have no line of their own for the output.
+        for format in [OutputFormat::Genbank, OutputFormat::Sco, OutputFormat::Bed] {
+            let mut together = Vec::new();
+            write_all_results(&mut together, &results, format).unwrap();
+            let mut one_by_one = Vec::new();
+            for sequence in &results {
+                write_results(&mut one_by_one, sequence, format).unwrap();
+            }
+            assert_eq!(together, one_by_one);
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use bio::bio_types::strand::Strand;
 use rayon::prelude::*;
 
@@ -6,8 +8,11 @@ use crate::{
         INITIAL_MAX_SCORE, MAX_MOTIF_LENGTH, MIN_MOTIF_SCORE, MOTIF_THRESHOLD_OFFSET,
         RBS_DOWNSTREAM_DISTANCE, RBS_UPSTREAM_DISTANCE,
     },
-    sequence::{calculate_kmer_index, encoded_base_code, shine_dalgarno_exact, shine_dalgarno_mm},
-    types::{CodonType, Motif, Node, Training},
+    sequence::{
+        calculate_kmer_index, encoded_base_code, is_a, is_g, shine_dalgarno_exact,
+        shine_dalgarno_exact_from, shine_dalgarno_mm, shine_dalgarno_mm_from,
+    },
+    types::{CodonType, Motif, MotifWeights, Node, Training},
 };
 
 /// Calculate both exact and mismatch Shine-Dalgarno scores for a position
@@ -35,44 +40,113 @@ const MOTIF_WINDOW_DOWNSTREAM: isize = 6;
 /// Number of distinct motif window starts.
 const MOTIF_WINDOW_COUNT: usize = (MOTIF_WINDOW_UPSTREAM - MOTIF_WINDOW_DOWNSTREAM + 1) as usize;
 
+/// For every 6-mer, the bases that match the Shine-Dalgarno pattern the
+/// searches look for (`A` at offsets 0 and 3, `G` at the others), one bit
+/// per offset.
+static RBS_MATCH_MASKS: LazyLock<[u8; RbsLookup::KMER_COUNT]> = LazyLock::new(|| {
+    let mut masks = [0u8; RbsLookup::KMER_COUNT];
+    for (kmer, mask) in masks.iter_mut().enumerate() {
+        let packed = pack_kmer(kmer);
+        for offset in 0..RBS_KMER_LENGTH {
+            let matches = if offset % 3 == 0 {
+                is_a(&packed, offset)
+            } else {
+                is_g(&packed, offset)
+            };
+            *mask |= u8::from(matches) << offset;
+        }
+    }
+    masks
+});
+
+/// The 6-mer `kmer`, packed the way the encoded sequence stores it.
+fn pack_kmer(kmer: usize) -> [u8; 2] {
+    let mut packed = [0u8; 2];
+    for offset in 0..RBS_KMER_LENGTH {
+        let base = ((kmer >> (2 * offset)) & 0b11) as u8;
+        packed[offset / 4] |= base << (2 * (offset % 4));
+    }
+    packed
+}
+
 /// Highest ribosome-binding-site motif indices for every 6-mer and spacer
 /// distance, tabulated with [`shine_dalgarno_exact`] / [`shine_dalgarno_mm`].
 ///
 /// Both searches only read the bases between the search position and the
 /// start codon (at most six) and otherwise depend on the distance to the
 /// start codon and the motif weights, so each (6-mer, distance) pair has a
-/// fixed answer for a given weight set.
-struct RbsLookup {
-    /// `[6-mer index][distance]` -> `[exact motif index, mismatch motif index]`
-    table: Vec<[u8; 2]>,
+/// fixed answer for a given weight set. Of the bases they only ask whether
+/// each matches the pattern ([`RBS_MATCH_MASKS`]), so the 6-mers with the
+/// same matches share one entry per distance.
+#[derive(Debug)]
+pub(crate) struct RbsLookup {
+    /// `[match mask][distance]` -> `[exact motif index, mismatch motif index]`
+    table: [[u8; 2]; Self::MASK_COUNT * (Self::MAX_DISTANCE + 1)],
+    match_masks: &'static [u8; Self::KMER_COUNT],
+    /// The motif weights, for the few searches that are not tabulated.
+    rbs_weights: Vec<f64>,
 }
 
 impl RbsLookup {
     const MAX_DISTANCE: usize = RBS_UPSTREAM_DISTANCE + 1;
     const KMER_COUNT: usize = 1 << (2 * RBS_KMER_LENGTH);
+    const MASK_COUNT: usize = 1 << RBS_KMER_LENGTH;
 
-    fn new(rbs_weights: &[f64]) -> Self {
-        let mut table = vec![[0u8; 2]; Self::KMER_COUNT * (Self::MAX_DISTANCE + 1)];
-        for kmer in 0..Self::KMER_COUNT {
-            // Pack the 6-mer the way the encoded sequence stores it so the
-            // original searches can run on it directly.
-            let mut packed = [0u8; 2];
-            for offset in 0..RBS_KMER_LENGTH {
-                let base = ((kmer >> (2 * offset)) & 0b11) as u8;
-                packed[offset / 4] |= base << (2 * (offset % 4));
+    /// Tabulates the searches for the motif weights `rbs_weights`.
+    pub(crate) fn new(rbs_weights: &[f64]) -> Self {
+        let match_masks: &'static [u8; Self::KMER_COUNT] = &RBS_MATCH_MASKS;
+        let mut table = [[0u8; 2]; Self::MASK_COUNT * (Self::MAX_DISTANCE + 1)];
+        let mut tabulated = [false; Self::MASK_COUNT];
+        for (kmer, &mask) in match_masks.iter().enumerate() {
+            // The first 6-mer with each set of matches stands for them all.
+            let mask = usize::from(mask);
+            if std::mem::replace(&mut tabulated[mask], true) {
+                continue;
             }
+            let packed = pack_kmer(kmer);
             for distance in 0..=Self::MAX_DISTANCE {
                 let [exact, mismatch] = calculate_rbs_scores(&packed, 0, distance, rbs_weights);
-                table[kmer * (Self::MAX_DISTANCE + 1) + distance] = [exact as u8, mismatch as u8];
+                table[mask * (Self::MAX_DISTANCE + 1) + distance] = [exact as u8, mismatch as u8];
             }
         }
-        Self { table }
+        Self {
+            table,
+            match_masks,
+            rbs_weights: rbs_weights.to_vec(),
+        }
     }
 
     #[inline]
     fn lookup(&self, kmer: usize, distance: usize) -> [usize; 2] {
-        let [exact, mismatch] = self.table[kmer * (Self::MAX_DISTANCE + 1) + distance];
+        let mask = usize::from(self.match_masks[kmer & (Self::KMER_COUNT - 1)]);
+        let [exact, mismatch] = self.table[mask * (Self::MAX_DISTANCE + 1) + distance];
         [usize::from(exact), usize::from(mismatch)]
+    }
+
+    /// Scores the search positions before the start of the sequence, down to
+    /// [`RBS_UPSTREAM_DISTANCE`] bases upstream of the start codon at
+    /// `start_codon_position`, and keeps the best motif indices.
+    ///
+    /// Prodigal skips those positions on the forward strand but not on the
+    /// reverse strand, where a search from one of them can find a motif at
+    /// the very start of the strand that no search from inside finds: the
+    /// motif pattern is aligned to the search position. Only a start codon
+    /// within twenty bases of the start of its strand has any.
+    fn score_before_sequence(
+        &self,
+        seq: &[u8],
+        start_codon_position: usize,
+        best: &mut [usize; 2],
+    ) {
+        let first = start_codon_position as isize - RBS_UPSTREAM_DISTANCE as isize;
+        for position in first..0 {
+            let exact =
+                shine_dalgarno_exact_from(seq, position, start_codon_position, &self.rbs_weights);
+            let mismatch =
+                shine_dalgarno_mm_from(seq, position, start_codon_position, &self.rbs_weights);
+            best[0] = best[0].max(exact);
+            best[1] = best[1].max(mismatch);
+        }
     }
 
     /// Scores every search position in `search_start..=search_end` against the
@@ -138,8 +212,24 @@ pub fn rbs_score(
     nodes: &mut [Node],
     training: &Training,
 ) {
-    let lookup = RbsLookup::new(&*training.rbs_weights);
+    rbs_score_with(
+        seq,
+        reverse_complement_encoded_sequence,
+        sequence_length,
+        nodes,
+        &RbsLookup::new(&*training.rbs_weights),
+    );
+}
 
+/// [`rbs_score`] with the motif searches of the training's weights already
+/// tabulated in `lookup`.
+pub(crate) fn rbs_score_with(
+    seq: &[u8],
+    reverse_complement_encoded_sequence: &[u8],
+    sequence_length: usize,
+    nodes: &mut [Node],
+    lookup: &RbsLookup,
+) {
     // Parallelize RBS scoring across all start nodes
     nodes
         .par_iter_mut()
@@ -171,6 +261,11 @@ pub fn rbs_score(
                     let end_pos =
                         (sequence_length - node.position.index).saturating_sub(downstream_offset);
                     let target_pos = sequence_length - 1 - node.position.index;
+                    lookup.score_before_sequence(
+                        reverse_complement_encoded_sequence,
+                        target_pos,
+                        &mut best,
+                    );
                     lookup.score_window(
                         reverse_complement_encoded_sequence,
                         start_pos,
@@ -184,6 +279,298 @@ pub fn rbs_score(
 
             node.motif_info.ribosome_binding_sites = best;
         });
+}
+
+/// One of the motif windows [`find_best_upstream_motif`] scores for a start
+/// codon: a motif of `length_index + 3` bases, `spacer` bases upstream of
+/// the start codon.
+#[derive(Clone, Copy)]
+struct MotifCandidate {
+    /// Motif length minus three.
+    length_index: u8,
+    /// Position of the window among the 6-mers of a [`MotifSite`].
+    slot: u8,
+    /// Spacer class: 0 for 5-10 bases, 1 for 3-4, 2 for 11-12, 3 for 13-15.
+    space_index: u8,
+    /// Bases between the motif and the start codon.
+    spacer: u8,
+}
+
+/// Motif lengths: 3 to 6 bases.
+const MOTIF_LENGTHS: usize = 4;
+/// Spacers between a motif and the start codon: 3 to 15 bases.
+const MOTIF_SPACERS: usize = 13;
+/// Motif lengths times spacers.
+const MOTIF_CANDIDATE_COUNT: usize = MOTIF_LENGTHS * MOTIF_SPACERS;
+/// The `inside` bits of a [`MotifSite`] whose windows are all in the sequence.
+const ALL_MOTIF_CANDIDATES: u64 = (1 << MOTIF_CANDIDATE_COUNT) - 1;
+
+/// The candidate windows in the order the search visits them: motif lengths
+/// from six bases down to three, and for each the windows from the farthest
+/// upstream to the nearest. The first of several equally good windows wins.
+const MOTIF_CANDIDATES: [MotifCandidate; MOTIF_CANDIDATE_COUNT] = {
+    let mut candidates = [MotifCandidate {
+        length_index: 0,
+        slot: 0,
+        space_index: 0,
+        spacer: 0,
+    }; MOTIF_CANDIDATE_COUNT];
+    let mut count = 0;
+    let mut length_index = 4;
+    while length_index > 0 {
+        length_index -= 1;
+        // The window starts `distance + length_index` bases upstream of the
+        // start codon, `distance` running from 18 down to 6.
+        let mut distance = 18;
+        while distance >= 6 {
+            candidates[count] = MotifCandidate {
+                length_index: length_index as u8,
+                slot: (MOTIF_WINDOW_UPSTREAM as usize - distance - length_index) as u8,
+                space_index: if distance >= 16 {
+                    3
+                } else if distance >= 14 {
+                    2
+                } else if distance <= 7 {
+                    1
+                } else {
+                    0
+                },
+                spacer: (distance - 3) as u8,
+            };
+            count += 1;
+            distance -= 1;
+        }
+    }
+    candidates
+};
+
+/// What a motif search reads of the sequence upstream of a start codon: the
+/// 6-mer at each window start, of which a shorter motif is the low bits.
+///
+/// The windows start 21 to 6 bases upstream of the start codon. The sites of
+/// a set of nodes do not depend on the motif weights, so start training,
+/// which searches every start node's motifs once per iteration, reads them
+/// from the sequence once.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MotifSite {
+    /// 6-mer at window start `start - 21 + slot` (bases past the sequence
+    /// end read as zero); unspecified for windows before the sequence start.
+    kmers: [u16; MOTIF_WINDOW_COUNT],
+    /// One bit per candidate window that lies inside the sequence.
+    inside: u64,
+}
+
+impl MotifSite {
+    /// A site without a window.
+    const EMPTY: Self = Self {
+        kmers: [0; MOTIF_WINDOW_COUNT],
+        inside: 0,
+    };
+
+    /// The site of the start codon at `start` of the strand `strand_sequence`.
+    pub(crate) fn new(strand_sequence: &[u8], start: usize, sequence_length: usize) -> Self {
+        let mut site = Self {
+            kmers: [0; MOTIF_WINDOW_COUNT],
+            inside: 0,
+        };
+
+        let first_window = (start as isize - MOTIF_WINDOW_UPSTREAM).max(0);
+        let last_window = start as isize - MOTIF_WINDOW_DOWNSTREAM;
+        if last_window >= first_window {
+            let base_at = |position: usize| {
+                if position < sequence_length {
+                    usize::from(encoded_base_code(strand_sequence, position))
+                } else {
+                    0
+                }
+            };
+            let first_window = first_window as usize;
+            let first_slot =
+                (first_window as isize - (start as isize - MOTIF_WINDOW_UPSTREAM)) as usize;
+            let mut kmer = 0;
+            for offset in 0..MOTIF_KMER_LENGTH {
+                kmer |= base_at(first_window + offset) << (2 * offset);
+            }
+            site.kmers[first_slot] = kmer as u16;
+            for (slot, position) in ((first_window + 1)..=(last_window as usize)).enumerate() {
+                kmer = (kmer >> 2)
+                    | (base_at(position + MOTIF_KMER_LENGTH - 1) << (2 * (MOTIF_KMER_LENGTH - 1)));
+                site.kmers[first_slot + slot + 1] = kmer as u16;
+            }
+        }
+
+        for (number, candidate) in MOTIF_CANDIDATES.iter().enumerate() {
+            let window = start as isize - MOTIF_WINDOW_UPSTREAM + isize::from(candidate.slot as i8);
+            let motif_length = usize::from(candidate.length_index) + 3;
+            if window >= 0 && window as usize + motif_length <= sequence_length {
+                site.inside |= 1 << number;
+            }
+        }
+        site
+    }
+
+    /// The highest scoring motif of the site under the weights of
+    /// `training`; in stage 2 of start training, and for gene prediction,
+    /// only if it scores well.
+    pub(crate) fn best_motif(&self, training: &Training, stage: usize) -> Motif {
+        // Score every window, then find the first of the best. A window
+        // outside the sequence scores NaN, which is never the best.
+        let mut scores = [f64::NAN; MOTIF_CANDIDATE_COUNT];
+        if self.inside == ALL_MOTIF_CANDIDATES {
+            // The candidates in the order of `MOTIF_CANDIDATES`, spelled
+            // out as loops of fixed length so that their slots, masks and
+            // weight rows are constants in the generated code.
+            for (group, group_scores) in scores.chunks_exact_mut(MOTIF_SPACERS).enumerate() {
+                let length_index = MOTIF_LENGTHS - 1 - group;
+                let weight_rows = &training.motif_weights[length_index];
+                let motif_mask = (1usize << (2 * (length_index + 3))) - 1;
+                for (nearer, score) in group_scores.iter_mut().enumerate() {
+                    let candidate = &MOTIF_CANDIDATES[group * MOTIF_SPACERS + nearer];
+                    *score = weight_rows[usize::from(candidate.space_index)]
+                        [usize::from(self.kmers[usize::from(candidate.slot)]) & motif_mask];
+                }
+            }
+        } else {
+            for (number, (score, candidate)) in scores.iter_mut().zip(&MOTIF_CANDIDATES).enumerate()
+            {
+                if self.inside & (1 << number) != 0 {
+                    *score = training.motif_weights[usize::from(candidate.length_index)]
+                        [usize::from(candidate.space_index)][self.motif_index(candidate)];
+                }
+            }
+        }
+
+        // The scores do not depend on each other, so the best is looked for
+        // in four interleaved lanes, each keeping the first of its best,
+        // without one comparison waiting for the previous one.
+        const LANES: usize = 4;
+        let mut lane_score = [INITIAL_MAX_SCORE; LANES];
+        let mut lane_best = [usize::MAX; LANES];
+        for (group, group_scores) in scores.chunks_exact(LANES).enumerate() {
+            for lane in 0..LANES {
+                let better = group_scores[lane] > lane_score[lane];
+                lane_score[lane] = if better {
+                    group_scores[lane]
+                } else {
+                    lane_score[lane]
+                };
+                lane_best[lane] = if better {
+                    group * LANES + lane
+                } else {
+                    lane_best[lane]
+                };
+            }
+        }
+        let mut max_sc = INITIAL_MAX_SCORE;
+        let mut best = usize::MAX;
+        for lane in 0..LANES {
+            if lane_best[lane] != usize::MAX
+                && (lane_score[lane] > max_sc
+                    || (lane_score[lane] == max_sc && lane_best[lane] < best))
+            {
+                max_sc = lane_score[lane];
+                best = lane_best[lane];
+            }
+        }
+
+        // In stage 2, only accept good scoring motifs
+        let is_stage_two = stage == 2;
+        let is_poor_motif =
+            max_sc == MIN_MOTIF_SCORE || max_sc < training.no_motif_weight + MOTIF_THRESHOLD_OFFSET;
+
+        // Do NOT neutralize the score in early stages when no window is found.
+        // C keeps max_sc at -100.0 in this case, strongly disfavoring edge starts.
+        if is_stage_two && is_poor_motif {
+            Motif {
+                index: 0,
+                length: 0,
+                space_index: 0,
+                spacer: 0,
+                score: training.no_motif_weight,
+            }
+        } else if let Some(candidate) = MOTIF_CANDIDATES.get(best) {
+            Motif {
+                index: self.motif_index(candidate),
+                length: usize::from(candidate.length_index) + 3,
+                space_index: usize::from(candidate.space_index),
+                spacer: usize::from(candidate.spacer),
+                score: max_sc,
+            }
+        } else {
+            Motif {
+                index: 0,
+                length: 0,
+                space_index: 0,
+                spacer: 0,
+                score: max_sc,
+            }
+        }
+    }
+
+    /// Adds one to the count of the motif in every window of the site, for
+    /// every spacer class: what the first stage of start training counts for
+    /// a start node.
+    pub(crate) fn count_windows(&self, motif_counts: &mut MotifWeights) {
+        for (number, candidate) in MOTIF_CANDIDATES.iter().enumerate() {
+            if self.inside & (1 << number) != 0 {
+                let motif_index = self.motif_index(candidate);
+                for spacer_counts in &mut motif_counts[usize::from(candidate.length_index)] {
+                    spacer_counts[motif_index] += 1.0;
+                }
+            }
+        }
+    }
+
+    /// Index of the motif in `candidate`'s window: the low bits of the
+    /// 6-mer that starts there.
+    #[inline]
+    fn motif_index(&self, candidate: &MotifCandidate) -> usize {
+        let motif_mask = (1usize << (2 * (usize::from(candidate.length_index) + 3))) - 1;
+        usize::from(self.kmers[usize::from(candidate.slot)]) & motif_mask
+    }
+}
+
+/// The motif sites of `nodes`, one per node: empty for the stop nodes, whose
+/// motifs are never searched.
+pub(crate) fn motif_sites(
+    seq: &[u8],
+    reverse_complement_encoded_sequence: &[u8],
+    sequence_length: usize,
+    nodes: &[Node],
+) -> Vec<MotifSite> {
+    nodes
+        .iter()
+        .map(|node| {
+            if node.position.codon_type == CodonType::Stop {
+                MotifSite::EMPTY
+            } else {
+                motif_site(
+                    seq,
+                    reverse_complement_encoded_sequence,
+                    sequence_length,
+                    node,
+                )
+            }
+        })
+        .collect()
+}
+
+/// The motif site of `node`, a start node.
+pub(crate) fn motif_site(
+    seq: &[u8],
+    reverse_complement_encoded_sequence: &[u8],
+    sequence_length: usize,
+    node: &Node,
+) -> MotifSite {
+    let (wseq, start) = match node.position.strand {
+        Strand::Forward => (seq, node.position.index),
+        Strand::Reverse => (
+            reverse_complement_encoded_sequence,
+            sequence_length - 1 - node.position.index,
+        ),
+        Strand::Unknown => unreachable!(),
+    };
+    MotifSite::new(wseq, start, sequence_length)
 }
 
 /// Find the highest scoring motif/spacer combination for a node.
@@ -215,117 +602,13 @@ pub fn find_best_upstream_motif(
         return;
     }
 
-    let (wseq, start) = match node.position.strand {
-        Strand::Forward => (seq, node.position.index),
-        Strand::Reverse => (
-            reverse_complement_encoded_sequence,
-            sequence_length - 1 - node.position.index,
-        ),
-        Strand::Unknown => unreachable!(),
-    };
-
-    let mut max_sc = INITIAL_MAX_SCORE;
-    let mut max_spacendx = 0;
-    let mut max_spacer = 0;
-    let mut max_ndx = 0;
-    let mut max_len = 0;
-
-    // Every motif window starts in [start - 21, start - 6]. Read one 6-mer per
-    // window start (bases past the sequence end read as zero) and derive the
-    // shorter motifs by masking; a motif's bases are the low bits of the
-    // 6-mer at the same position.
-    let first_window = (start as isize - MOTIF_WINDOW_UPSTREAM).max(0);
-    let last_window = start as isize - MOTIF_WINDOW_DOWNSTREAM;
-    let mut window_kmers = [0usize; MOTIF_WINDOW_COUNT];
-    if last_window >= first_window {
-        let base_at = |position: usize| {
-            if position < sequence_length {
-                usize::from(encoded_base_code(wseq, position))
-            } else {
-                0
-            }
-        };
-        let first_window = first_window as usize;
-        let mut kmer = 0;
-        for offset in 0..MOTIF_KMER_LENGTH {
-            kmer |= base_at(first_window + offset) << (2 * offset);
-        }
-        window_kmers[0] = kmer;
-        for (slot, position) in ((first_window + 1)..=(last_window as usize)).enumerate() {
-            kmer = (kmer >> 2)
-                | (base_at(position + MOTIF_KMER_LENGTH - 1) << (2 * (MOTIF_KMER_LENGTH - 1)));
-            window_kmers[slot + 1] = kmer;
-        }
-    }
-
-    // Search through motif lengths 3-6 (i goes from 3 down to 0, representing lengths 6 down to 3)
-    for i in (0..=3).rev() {
-        let motif_len = i + 3;
-        let motif_mask = (1usize << (2 * motif_len as usize)) - 1;
-
-        // Search positions from start-18-i to start-6-i
-        let search_start: isize = start as isize - 18 - i;
-        let search_end: isize = start as isize - 6 - i;
-
-        for j in search_start..=search_end {
-            if j < 0 {
-                continue;
-            }
-            // Ensure the k-mer window [j, j+motif_len) is within the nucleotide sequence.
-            // the nucleotide length (sequence_length), not the byte length of the buffer.
-            if (j as usize) + (motif_len as usize) > sequence_length {
-                continue;
-            }
-            let spacer = start as isize - j - i - 3;
-            let spacendx = if j <= start as isize - 16 - i {
-                3
-            } else if j <= start as isize - 14 - i {
-                2
-            } else if j >= start as isize - 7 - i {
-                1
-            } else {
-                0
-            };
-
-            let index = window_kmers[(j - first_window) as usize] & motif_mask;
-            let score = training.motif_weights[i as usize][spacendx][index];
-
-            if score > max_sc {
-                max_sc = score;
-                max_spacendx = spacendx;
-                max_spacer = spacer;
-                max_ndx = index;
-                max_len = motif_len;
-            }
-        }
-    }
-
-    // In stage 2, only accept good scoring motifs
-    let is_stage_two = stage == 2;
-    let is_poor_motif =
-        max_sc == MIN_MOTIF_SCORE || max_sc < training.no_motif_weight + MOTIF_THRESHOLD_OFFSET;
-
-    // Do NOT neutralize the score in early stages when no window is found.
-    // C keeps max_sc at -100.0 in this case, strongly disfavoring edge starts.
-    let effective_max_sc = max_sc;
-
-    node.motif_info.best_motif = if is_stage_two && is_poor_motif {
-        Motif {
-            index: 0,
-            length: 0,
-            space_index: 0,
-            spacer: 0,
-            score: training.no_motif_weight,
-        }
-    } else {
-        Motif {
-            index: max_ndx,
-            length: max_len as usize,
-            space_index: max_spacendx,
-            spacer: max_spacer as usize,
-            score: effective_max_sc,
-        }
-    };
+    let site = motif_site(
+        seq,
+        reverse_complement_encoded_sequence,
+        sequence_length,
+        node,
+    );
+    node.motif_info.best_motif = site.best_motif(training, stage);
 }
 
 #[cfg(test)]
@@ -366,6 +649,137 @@ mod tests {
             gc_bias_factors: [1.0; 3],
             gene_dicodon_table: Box::new([0.0; 4096]),
             total_dicodons: 0,
+        }
+    }
+
+    /// The motif search as Prodigal writes it: every motif length from six
+    /// bases down to three, every window from the farthest to the nearest.
+    fn best_motif_reference(
+        training: &Training,
+        strand_sequence: &[u8],
+        start: usize,
+        sequence_length: usize,
+        stage: usize,
+    ) -> Motif {
+        let mut best = Motif {
+            score: INITIAL_MAX_SCORE,
+            ..Motif::default()
+        };
+        for length_index in (0..=3isize).rev() {
+            let motif_length = (length_index + 3) as usize;
+            for window in (start as isize - 18 - length_index)..=(start as isize - 6 - length_index)
+            {
+                if window < 0 || window as usize + motif_length > sequence_length {
+                    continue;
+                }
+                let spacer = start as isize - window - length_index - 3;
+                let space_index = if window <= start as isize - 16 - length_index {
+                    3
+                } else if window <= start as isize - 14 - length_index {
+                    2
+                } else if window >= start as isize - 7 - length_index {
+                    1
+                } else {
+                    0
+                };
+                let index = calculate_kmer_index(motif_length, strand_sequence, window as usize);
+                let score = training.motif_weights[length_index as usize][space_index][index];
+                if score > best.score {
+                    best = Motif {
+                        index,
+                        length: motif_length,
+                        space_index,
+                        spacer: spacer as usize,
+                        score,
+                    };
+                }
+            }
+        }
+        if stage == 2
+            && (best.score == MIN_MOTIF_SCORE
+                || best.score < training.no_motif_weight + MOTIF_THRESHOLD_OFFSET)
+        {
+            Motif {
+                score: training.no_motif_weight,
+                ..Motif::default()
+            }
+        } else {
+            best
+        }
+    }
+
+    #[test]
+    fn motif_site_search_matches_the_window_by_window_search() {
+        use crate::sequence::encoded::EncodedSequence;
+
+        let mut random = crate::test_random::XorShift(0x94D0_49BB_1331_11EB_u64);
+        let mut next = || random.next();
+        let length = 257;
+        let bases: Vec<u8> = (0..length)
+            .map(|_| b"ACGT"[(next() % 4) as usize])
+            .collect();
+        let encoded = EncodedSequence::without_masking(&bases);
+
+        // Weights with few distinct values, so that many windows tie and
+        // the first of the best has to be the one found; one set in which
+        // every motif is poor.
+        let mut trainings = Vec::new();
+        for distinct in [1u64, 2, 3, 17, 1 << 20] {
+            let mut training = create_test_training();
+            for weight in training.motif_weights.iter_mut().flatten().flatten() {
+                *weight = (next() % distinct) as f64 / distinct as f64 * 8.0 - 4.0;
+            }
+            training.no_motif_weight = (next() % 5) as f64 - 2.0;
+            trainings.push(training);
+        }
+
+        for training in &trainings {
+            for strand_sequence in [
+                &encoded.forward_sequence,
+                &encoded.reverse_complement_sequence,
+            ] {
+                // Every start position, including those too close to the
+                // sequence start for some or all of the windows.
+                for start in 0..length {
+                    let site = MotifSite::new(strand_sequence, start, length);
+                    for stage in 0..3 {
+                        assert_eq!(
+                            site.best_motif(training, stage),
+                            best_motif_reference(training, strand_sequence, start, length, stage),
+                            "start {start}, stage {stage}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rbs_lookup_matches_the_searches_for_every_kmer() {
+        let mut random = crate::test_random::XorShift(0x853C_49E6_748F_EA9B_u64);
+        let mut next = || random.next();
+        let mut weight_sets = vec![[0.0f64; 28], [1.0f64; 28]];
+        for _ in 0..3 {
+            let mut weights = [0.0f64; 28];
+            for weight in weights.iter_mut() {
+                // A few distinct values, so that ties between motifs occur.
+                *weight = (next() % 9) as f64 - 4.0;
+            }
+            weight_sets.push(weights);
+        }
+
+        for weights in &weight_sets {
+            let lookup = RbsLookup::new(weights);
+            for kmer in 0..RbsLookup::KMER_COUNT {
+                let packed = pack_kmer(kmer);
+                for distance in 0..=RbsLookup::MAX_DISTANCE {
+                    assert_eq!(
+                        lookup.lookup(kmer, distance),
+                        calculate_rbs_scores(&packed, 0, distance, weights),
+                        "kmer {kmer}, distance {distance}"
+                    );
+                }
+            }
         }
     }
 

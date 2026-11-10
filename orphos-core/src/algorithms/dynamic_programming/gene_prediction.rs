@@ -7,12 +7,12 @@ use crate::{
         overlap_resolution::{resolve_simple_overlaps, resolve_triple_overlaps},
         scoring::{
             connection_types::ConnectionType,
-            handlers::{ConnectionCandidate, DpNode, TargetScores, evaluate_connection},
+            handlers::{ConnectionCandidate, DpNode, NO_NODE, TargetScores, evaluate_connection},
         },
     },
     constants::{MAX_NODE_DIST, MAXIMUM_OPPOSITE_OVERLAP, OPERON_DISTANCE, STOP_CODON_OFFSET},
     node::{IntergenicNode, intergenic_mod_values},
-    types::{CodonType, Node, Training},
+    types::{Node, Training},
 };
 
 /// Basic dynamic programming routine for predicting genes.
@@ -24,10 +24,25 @@ use crate::{
 ///
 /// * `is_final_pass = false` – first pass, GC‑frame only (training set)
 /// * `is_final_pass = true`  – second pass, full scoring (final prediction)
+///
+/// `nodes` must be sorted by position, as `sort_nodes_by_position` leaves
+/// them.
 pub fn predict_genes(
     nodes: &mut [Node],
     training: &Training,
     is_final_pass: bool,
+) -> Option<usize> {
+    predict_genes_in(nodes, training, is_final_pass, &mut DpWorkspace::default())
+}
+
+/// [`predict_genes`] in `workspace`, whose buffers a caller that predicts
+/// genes many times (once per preset model in metagenomic mode) keeps from
+/// one prediction to the next.
+pub(crate) fn predict_genes_in(
+    nodes: &mut [Node],
+    training: &Training,
+    is_final_pass: bool,
+    workspace: &mut DpWorkspace,
 ) -> Option<usize> {
     let node_count = nodes.len();
     if node_count == 0 {
@@ -35,8 +50,8 @@ pub fn predict_genes(
     }
 
     initialize_nodes(nodes);
-    compute_dynamic_programming_scores(nodes, training, is_final_pass);
-    let max_index = find_maximum_terminal_node(nodes)?;
+    compute_dynamic_programming_scores(nodes, training, is_final_pass, workspace);
+    let max_index = find_maximum_terminal_node(&workspace.dp_nodes)?;
 
     resolve_triple_overlaps(nodes, max_index);
     resolve_simple_overlaps(nodes, max_index);
@@ -54,24 +69,43 @@ fn initialize_nodes(nodes: &mut [Node]) {
     }
 }
 
-/// Perform the main dynamic programming computation.
+/// The buffers of the dynamic programming: the compact view of the nodes
+/// and the lists of candidate sources.
+#[derive(Default)]
+pub(crate) struct DpWorkspace {
+    dp_nodes: Vec<DpNode>,
+    sources: SourceLists,
+}
+
+/// Perform the main dynamic programming computation, leaving the compact
+/// view of the nodes it ran on, with their final total scores, in
+/// `workspace`.
 ///
 /// Every node `i` considers connections from the nodes `j` in the window
 /// `[min, i)` chosen by [`calculate_distance_constraints`]. Only a few
-/// strand/codon-type combinations form valid connections, so instead of
-/// scanning the whole window and rejecting most pairs, sources are kept in
-/// per-kind (strand × stop/start) and per-frame lists and only compatible
-/// lists are visited for each target. Sources that can never form a
-/// connection (see [`DpNode::has_edge_artifacts`]) are never entered into the
-/// lists.
+/// strand/codon-type combinations form valid connections, and most of those
+/// only for sources in a narrow range of positions, so instead of scanning
+/// the whole window and rejecting most pairs, sources are kept in per-kind
+/// (strand × stop/start) lists in node order and each target visits only the
+/// sources that can connect to it:
 ///
-/// Connections whose score does not depend on the pair (5'rev->5'fwd, and
-/// intergenic connections farther apart than the operon distance, which all
-/// receive the same penalty, as well as every intergenic connection in the
-/// first pass, which scores zero) are resolved with sliding-window maxima
-/// over the source totals instead of being evaluated one by one. Connection
-/// types whose handlers reject sources outside an index range are only
-/// evaluated inside that range.
+/// * the lists are sorted by position, so sources a handler accepts only
+///   inside a position range are found from the end of the list or with a
+///   binary search;
+/// * a reverse stop connects to a later reverse node only while that node
+///   lies before the stop's own stop value, so reverse stops are dropped from
+///   the lists the reverse gene and reverse operon connections read once a
+///   target has passed it ([`SourceLists::live_reverse_stops`]);
+/// * connections whose score does not depend on the pair are resolved with
+///   sliding-window maxima over the source totals instead of being evaluated
+///   one by one: 5'rev->5'fwd; intergenic connections farther apart than the
+///   operon distance, which all receive the same penalty, and every
+///   intergenic connection in the first pass, which scores zero; and
+///   3'fwd->3'rev connections whose source lies outside the short ranges in
+///   which it can overlap one of the target's genes.
+///
+/// Sources that can never form a connection (see
+/// [`DpNode::has_edge_artifacts`]) are never entered into the lists.
 ///
 /// The result is identical to the exhaustive scan: a target takes the
 /// candidate with the highest `source.total_score + connection score`, and on
@@ -82,12 +116,12 @@ fn compute_dynamic_programming_scores(
     nodes: &mut [Node],
     training: &Training,
     is_final_pass: bool,
+    workspace: &mut DpWorkspace,
 ) {
-    let mut dp_nodes: Vec<DpNode> = nodes
-        .iter()
-        .map(|node| DpNode::from_node(node, training))
-        .collect();
-    let mut sources = SourceLists::new();
+    let DpWorkspace { dp_nodes, sources } = workspace;
+    dp_nodes.clear();
+    dp_nodes.extend(nodes.iter().map(|node| DpNode::from_node(node, training)));
+    sources.clear();
     // Score of a connection that does not depend on the pair: zero in the
     // first pass (no score modifier), the distant-pair intergenic modifier in
     // the final pass.
@@ -96,131 +130,263 @@ fn compute_dynamic_programming_scores(
     } else {
         0.0
     };
+    // An intergenic connection scores the pass constant when its nodes are
+    // farther apart than this: in the first pass every admissible connection
+    // does, in the final pass those farther apart than three times the
+    // operon distance.
+    let intergenic_reach = if is_final_pass {
+        DISTANT_INTERGENIC_DISTANCE
+    } else {
+        STOP_CODON_OFFSET
+    };
     let mut previous_min = 0;
 
     for i in 0..dp_nodes.len() {
-        let min = calculate_distance_constraints(&dp_nodes, i);
+        let min = calculate_distance_constraints(dp_nodes, i);
         if min < i {
             if min < previous_min {
                 sources.reset_windows();
             }
-            sources.advance_to(min, previous_min);
             previous_min = min;
 
             let target = dp_nodes[i];
             let target_kind = NodeKind::of(&target);
-            let target_frame = target.index % 3;
             let mut best = BestCandidate::default();
             // Only reverse stop targets have connection types that use the
             // start-pointer scores.
             let target_scores = if matches!(target_kind, NodeKind::ReverseStop) {
-                TargetScores::for_target(&dp_nodes, i, training)
+                TargetScores::for_target(dp_nodes, i, training)
             } else {
                 TargetScores {
                     start_pointer_scores: [0.0; 3],
                 }
             };
 
-            {
-                let dp_nodes = &dp_nodes;
-                let mut consider = |source_list: &[usize], connection_type: ConnectionType| {
-                    for &j in source_list {
-                        if let Some(candidate) = evaluate_connection(
-                            dp_nodes,
-                            j,
-                            i,
-                            training,
-                            is_final_pass,
-                            connection_type,
-                            &target_scores,
-                        ) {
-                            best.offer(j, candidate);
+            // Scores the connection from source `$source` and offers it.
+            macro_rules! connect {
+                ($source:expr, $connection_type:expr) => {{
+                    let source: usize = $source;
+                    if let Some(candidate) = evaluate_connection(
+                        dp_nodes,
+                        source,
+                        i,
+                        training,
+                        is_final_pass,
+                        $connection_type,
+                        &target_scores,
+                    ) {
+                        best.offer(source, candidate);
+                    }
+                }};
+            }
+            // Scores the connections from the sources of `$kind` at the end
+            // of its list, back to the first one in the window for which
+            // `$rejected` holds: a condition on the source position that,
+            // once true going backwards, holds for every earlier source.
+            macro_rules! connect_latest {
+                ($kind:expr, $connection_type:expr, |$position:ident| $rejected:expr) => {{
+                    let list = &sources.kinds[$kind as usize];
+                    for (&id, &$position) in list.ids.iter().zip(&list.positions).rev() {
+                        if (id as usize) < min || $rejected {
+                            break;
                         }
+                        connect!(id as usize, $connection_type);
                     }
-                };
-
-                let is_constant =
-                    |source: &DpNode| intergenic_is_constant(source, &target, is_final_pass);
-
-                match target_kind {
-                    NodeKind::ForwardStart => {
-                        // 3'fwd->5'fwd: distant sources share one score; near
-                        // sources are scored individually in the final pass.
-                        let forward_stops = sources.window(NodeKind::ForwardStop);
-                        let split = intergenic_split(forward_stops, dp_nodes, is_constant);
-                        consider(&forward_stops[split..], ConnectionType::ForwardIntergenic);
-                        sources.admit(FORWARD_INTERGENIC_WINDOW, dp_nodes, is_constant);
-
-                        // 5'rev->5'fwd always scores the constant.
-                        sources.admit(FIVE_REVERSE_FIVE_FORWARD_WINDOW, dp_nodes, |source| {
-                            source.index < target.index
-                        });
-                    }
-                    NodeKind::ForwardStop => {
-                        // 5'fwd->3'fwd rejects starts at or before the previous stop.
-                        let starts = sources.window_in_frame(NodeKind::ForwardStart, target_frame);
-                        let first = starts
-                            .partition_point(|&j| dp_nodes[j].index as isize <= target.stop_value);
-                        consider(&starts[first..], ConnectionType::ForwardGene);
-
-                        // 3'fwd->3'fwd rejects stops at or before the previous stop.
-                        let stops = sources.window(NodeKind::ForwardStop);
-                        let first = stops
-                            .partition_point(|&j| dp_nodes[j].index as isize <= target.stop_value);
-                        consider(&stops[first..], ConnectionType::ForwardOperon);
-                    }
-                    NodeKind::ReverseStop => {
-                        // 5'rev->3'rev: as for the forward intergenic case.
-                        let reverse_starts = sources.window(NodeKind::ReverseStart);
-                        let split = intergenic_split(reverse_starts, dp_nodes, is_constant);
-                        consider(&reverse_starts[split..], ConnectionType::ReverseIntergenic);
-                        sources.admit(REVERSE_INTERGENIC_WINDOW, dp_nodes, is_constant);
-
-                        consider(
-                            sources.window(NodeKind::ForwardStop),
-                            ConnectionType::TripleOverlap,
-                        );
-                        consider(
-                            sources.window(NodeKind::ReverseStop),
-                            ConnectionType::ReverseOperon,
-                        );
-                    }
-                    NodeKind::ReverseStart => {
-                        consider(
-                            sources.window_in_frame(NodeKind::ReverseStop, target_frame),
-                            ConnectionType::ReverseGene,
-                        );
-
-                        // 3'fwd->5'rev rejects stops outside
-                        // [stop_value - 3, stop_value + MAXIMUM_OPPOSITE_OVERLAP - 6].
-                        let stops = sources.window(NodeKind::ForwardStop);
-                        let lowest = target.stop_value - 3;
-                        let highest = target.stop_value + MAXIMUM_OPPOSITE_OVERLAP as isize - 6;
-                        let first =
-                            stops.partition_point(|&j| (dp_nodes[j].index as isize) < lowest);
-                        let end = first
-                            + stops[first..]
-                                .partition_point(|&j| dp_nodes[j].index as isize <= highest);
-                        consider(&stops[first..end], ConnectionType::OverlappingOpposite);
-                    }
-                }
-
-                let windows: &[usize] = match target_kind {
-                    NodeKind::ForwardStart => {
-                        &[FORWARD_INTERGENIC_WINDOW, FIVE_REVERSE_FIVE_FORWARD_WINDOW]
-                    }
-                    NodeKind::ReverseStop => &[REVERSE_INTERGENIC_WINDOW],
-                    _ => &[],
-                };
-                for &window in windows {
-                    if let Some((j, total_score)) = sources.window_best(window) {
+                }};
+            }
+            // Offers the best source of a constant-score window.
+            macro_rules! offer_window_best {
+                ($window:expr) => {{
+                    if let Some(position) = sources.window_best($window, min) {
+                        let list = sources.window_sources($window);
                         best.offer(
-                            j,
+                            list.ids[position] as usize,
                             ConnectionCandidate {
-                                total_score,
+                                total_score: list.keys[position],
                                 max_frame: None,
                             },
                         );
+                    }
+                }};
+            }
+
+            match target_kind {
+                NodeKind::ForwardStart => {
+                    // 3'fwd->5'fwd: distant sources share one score; near
+                    // sources are scored individually (and all rejected in
+                    // the first pass).
+                    connect_latest!(
+                        NodeKind::ForwardStop,
+                        ConnectionType::ForwardIntergenic,
+                        |position| position + intergenic_reach < target.index
+                    );
+                    sources.admit(FORWARD_INTERGENIC_WINDOW, min, |position| {
+                        position + intergenic_reach < target.index
+                    });
+                    offer_window_best!(FORWARD_INTERGENIC_WINDOW);
+
+                    // 5'rev->5'fwd always scores the constant.
+                    sources.admit(FIVE_REVERSE_FIVE_FORWARD_WINDOW, min, |position| {
+                        position < target.index
+                    });
+                    offer_window_best!(FIVE_REVERSE_FIVE_FORWARD_WINDOW);
+                }
+                NodeKind::ForwardStop => {
+                    // 5'fwd->3'fwd rejects starts at or before the previous
+                    // stop, and starts of the other frames.
+                    for &id in sources.forward_starts_by_frame[target.index % 3]
+                        .iter()
+                        .rev()
+                    {
+                        let id = id as usize;
+                        if id < min || dp_nodes[id].index as isize <= target.stop_value {
+                            break;
+                        }
+                        connect!(id, ConnectionType::ForwardGene);
+                    }
+
+                    // 3'fwd->3'fwd rejects stops at or before the previous stop.
+                    connect_latest!(
+                        NodeKind::ForwardStop,
+                        ConnectionType::ForwardOperon,
+                        |position| position as isize <= target.stop_value
+                    );
+                }
+                NodeKind::ReverseStop => {
+                    // 5'rev->3'rev: as for the forward intergenic case.
+                    connect_latest!(
+                        NodeKind::ReverseStart,
+                        ConnectionType::ReverseIntergenic,
+                        |position| position + intergenic_reach < target.index
+                    );
+                    sources.admit(REVERSE_INTERGENIC_WINDOW, min, |position| {
+                        position + intergenic_reach < target.index
+                    });
+                    offer_window_best!(REVERSE_INTERGENIC_WINDOW);
+
+                    // 3'fwd->3'rev: a source overlaps the gene of one of the
+                    // target's start pointers only if it lies in a short
+                    // range around that gene's stop; such sources are scored
+                    // individually. Every other source the handler accepts
+                    // (those at least five bases before the target) scores
+                    // the pass constant.
+                    let mut overlap_ranges = [(0isize, -1isize); 3];
+                    for (range, &start_pointer) in
+                        overlap_ranges.iter_mut().zip(&target.start_pointers)
+                    {
+                        if start_pointer != NO_NODE {
+                            let stop_value = dp_nodes[start_pointer as usize].stop_value;
+                            *range = (
+                                stop_value - 4,
+                                stop_value + MAXIMUM_OPPOSITE_OVERLAP as isize - 6,
+                            );
+                        }
+                    }
+                    let in_overlap_range = |position: usize| {
+                        overlap_ranges.iter().any(|&(low, high)| {
+                            low <= position as isize && position as isize <= high
+                        })
+                    };
+                    let window_start = sources.window_start(NodeKind::ForwardStop, min);
+                    for &(low, high) in &overlap_ranges {
+                        if low > high {
+                            continue;
+                        }
+                        let list = &sources.kinds[NodeKind::ForwardStop as usize];
+                        let first = window_start
+                            + list.positions[window_start..]
+                                .partition_point(|&position| (position as isize) < low);
+                        for (&id, &position) in
+                            list.ids[first..].iter().zip(&list.positions[first..])
+                        {
+                            if position as isize > high {
+                                break;
+                            }
+                            connect!(id as usize, ConnectionType::TripleOverlap);
+                        }
+                    }
+                    sources.admit(TRIPLE_OVERLAP_WINDOW, min, |position| {
+                        position + 2 * STOP_CODON_OFFSET < target.index
+                    });
+                    if let Some(position) = sources.window_best(TRIPLE_OVERLAP_WINDOW, min) {
+                        let list = &sources.kinds[NodeKind::ForwardStop as usize];
+                        // The window covers the sources in the ranges too.
+                        // If its best is one of them, the best of the others
+                        // is found by looking at each.
+                        let position = if in_overlap_range(list.positions[position]) {
+                            let admitted = sources.windows[TRIPLE_OVERLAP_WINDOW].admitted;
+                            let mut best_outside: Option<usize> = None;
+                            for candidate in window_start..admitted {
+                                if in_overlap_range(list.positions[candidate]) {
+                                    continue;
+                                }
+                                let key = list.keys[candidate];
+                                let better = match best_outside {
+                                    Some(current) => key >= list.keys[current],
+                                    None => !key.is_nan(),
+                                };
+                                if better {
+                                    best_outside = Some(candidate);
+                                }
+                            }
+                            best_outside
+                        } else {
+                            Some(position)
+                        };
+                        if let Some(position) = position {
+                            best.offer(
+                                list.ids[position] as usize,
+                                ConnectionCandidate {
+                                    total_score: list.keys[position],
+                                    max_frame: None,
+                                },
+                            );
+                        }
+                    }
+
+                    // 3'rev->3'rev rejects sources whose stop value is at or
+                    // before the target.
+                    for live in &mut sources.live_reverse_stops {
+                        live.retain(|&id| {
+                            let id = id as usize;
+                            if dp_nodes[id].stop_value <= target.index as isize {
+                                return false;
+                            }
+                            if id >= min {
+                                connect!(id, ConnectionType::ReverseOperon);
+                            }
+                            true
+                        });
+                    }
+                }
+                NodeKind::ReverseStart => {
+                    // 3'rev->5'rev rejects sources whose stop value is at or
+                    // before the target, and stops of the other frames.
+                    sources.live_reverse_stops[target.index % 3].retain(|&id| {
+                        let id = id as usize;
+                        if dp_nodes[id].stop_value <= target.index as isize {
+                            return false;
+                        }
+                        if id >= min {
+                            connect!(id, ConnectionType::ReverseGene);
+                        }
+                        true
+                    });
+
+                    // 3'fwd->5'rev rejects stops outside
+                    // [stop_value - 3, stop_value + MAXIMUM_OPPOSITE_OVERLAP - 6].
+                    let lowest = target.stop_value - 3;
+                    let highest = target.stop_value + MAXIMUM_OPPOSITE_OVERLAP as isize - 6;
+                    let window_start = sources.window_start(NodeKind::ForwardStop, min);
+                    let list = &sources.kinds[NodeKind::ForwardStop as usize];
+                    let first = window_start
+                        + list.positions[window_start..]
+                            .partition_point(|&position| (position as isize) < lowest);
+                    for (&id, &position) in list.ids[first..].iter().zip(&list.positions[first..]) {
+                        if position as isize > highest {
+                            break;
+                        }
+                        connect!(id as usize, ConnectionType::OverlappingOpposite);
                     }
                 }
             }
@@ -240,7 +406,7 @@ fn compute_dynamic_programming_scores(
         if !node.has_edge_artifacts() {
             sources.push(
                 NodeKind::of(&node),
-                node.index % 3,
+                node.index,
                 i,
                 node.total_score + constant_score,
             );
@@ -269,31 +435,6 @@ fn distant_intergenic_mod(training: &Training) -> f64 {
 /// penalty (`dist > 3.0 * OPERON_DISTANCE`).
 const DISTANT_INTERGENIC_DISTANCE: usize = 3 * OPERON_DISTANCE as usize;
 
-/// Whether an intergenic connection from `source` to `target` scores the
-/// pass constant: in the first pass every admissible connection does, in the
-/// final pass those farther apart than three times the operon distance.
-#[inline]
-fn intergenic_is_constant(source: &DpNode, target: &DpNode, is_final_pass: bool) -> bool {
-    if is_final_pass {
-        source.index + DISTANT_INTERGENIC_DISTANCE < target.index
-    } else {
-        source.index + STOP_CODON_OFFSET < target.index
-    }
-}
-
-/// Position in `sources` (sorted by index) of the first source whose
-/// intergenic connection must be scored individually; the ones before it
-/// score the pass constant (or are rejected by the handler in the first pass,
-/// where nothing needs individual scoring).
-#[inline]
-fn intergenic_split(
-    sources: &[usize],
-    dp_nodes: &[DpNode],
-    is_constant: impl Fn(&DpNode) -> bool,
-) -> usize {
-    sources.partition_point(|&j| is_constant(&dp_nodes[j]))
-}
-
 /// Strand × start/stop classification of a node for connection dispatch.
 #[derive(Clone, Copy)]
 enum NodeKind {
@@ -318,64 +459,107 @@ impl NodeKind {
 const FORWARD_INTERGENIC_WINDOW: usize = 0;
 const REVERSE_INTERGENIC_WINDOW: usize = 1;
 const FIVE_REVERSE_FIVE_FORWARD_WINDOW: usize = 2;
+const TRIPLE_OVERLAP_WINDOW: usize = 3;
 
-/// Candidate sources, grouped by kind (and additionally by reading frame),
-/// in increasing node order, together with a cursor per list marking the
-/// start of the current distance window, and the sliding-window maxima for
-/// the constant-score connection types.
-struct SourceLists {
-    by_kind: [Vec<usize>; 4],
-    by_kind_and_frame: [[Vec<usize>; 3]; 4],
-    cursors: [usize; 4],
-    frame_cursors: [[usize; 3]; 4],
-    windows: [ConstantWindow; 3],
+/// The candidate sources of one kind, in increasing node order: for each,
+/// its node index, its position in the sequence and its key in the
+/// constant-score windows (`total_score + constant`).
+#[derive(Default)]
+struct KindSources {
+    ids: Vec<u32>,
+    positions: Vec<usize>,
+    keys: Vec<f64>,
+    /// List position of the first source inside the distance window it was
+    /// last asked for ([`SourceLists::window_start`]).
+    window_start: usize,
 }
 
-impl SourceLists {
-    fn new() -> Self {
+/// Candidate sources, grouped by kind, together with the views of them that
+/// the connection types read and the sliding-window maxima for the
+/// constant-score connection types.
+struct SourceLists {
+    kinds: [KindSources; 4],
+    /// Forward starts by reading frame, in increasing node order.
+    forward_starts_by_frame: [Vec<u32>; 3],
+    /// Reverse stops by reading frame, in increasing node order, without
+    /// those whose stop value a target has reached: targets come in position
+    /// order, so no later target can connect to them as a reverse gene or a
+    /// reverse operon.
+    live_reverse_stops: [Vec<u32>; 3],
+    windows: [ConstantWindow; 4],
+}
+
+impl Default for SourceLists {
+    fn default() -> Self {
         Self {
-            by_kind: Default::default(),
-            by_kind_and_frame: Default::default(),
-            cursors: [0; 4],
-            frame_cursors: [[0; 3]; 4],
+            kinds: Default::default(),
+            forward_starts_by_frame: Default::default(),
+            live_reverse_stops: Default::default(),
             windows: [
                 ConstantWindow::new(NodeKind::ForwardStop),
                 ConstantWindow::new(NodeKind::ReverseStart),
                 ConstantWindow::new(NodeKind::ReverseStart),
+                ConstantWindow::new(NodeKind::ForwardStop),
             ],
         }
     }
+}
+
+impl SourceLists {
+    /// Empties the lists, keeping their buffers.
+    fn clear(&mut self) {
+        for list in &mut self.kinds {
+            list.ids.clear();
+            list.positions.clear();
+            list.keys.clear();
+            list.window_start = 0;
+        }
+        for list in self
+            .forward_starts_by_frame
+            .iter_mut()
+            .chain(&mut self.live_reverse_stops)
+        {
+            list.clear();
+        }
+        self.reset_windows();
+    }
 
     #[inline]
-    fn push(&mut self, kind: NodeKind, frame: usize, index: usize, constant_total: f64) {
-        self.by_kind[kind as usize].push(index);
-        self.by_kind_and_frame[kind as usize][frame].push(index);
-        for window in &mut self.windows {
-            if window.kind == kind as usize {
-                window.keys.push(constant_total);
-            }
+    fn push(&mut self, kind: NodeKind, position: usize, index: usize, constant_total: f64) {
+        let list = &mut self.kinds[kind as usize];
+        list.ids.push(index as u32);
+        list.positions.push(position);
+        list.keys.push(constant_total);
+        match kind {
+            NodeKind::ForwardStart => self.forward_starts_by_frame[position % 3].push(index as u32),
+            NodeKind::ReverseStop => self.live_reverse_stops[position % 3].push(index as u32),
+            NodeKind::ForwardStop | NodeKind::ReverseStart => {}
         }
     }
 
-    /// Moves every cursor to the first source with index `>= min` and drops
-    /// sources before `min` from the sliding windows.
+    /// List position of the first source of `kind` with node index `>= min`.
     #[inline]
-    fn advance_to(&mut self, min: usize, previous_min: usize) {
-        for (list, cursor) in self.by_kind.iter().zip(self.cursors.iter_mut()) {
-            advance_cursor(list, cursor, min, previous_min);
-        }
-        for (lists, cursors) in self
-            .by_kind_and_frame
-            .iter()
-            .zip(self.frame_cursors.iter_mut())
-        {
-            for (list, cursor) in lists.iter().zip(cursors.iter_mut()) {
-                advance_cursor(list, cursor, min, previous_min);
+    fn window_start(&mut self, kind: NodeKind, min: usize) -> usize {
+        let list = &mut self.kinds[kind as usize];
+        let ids = &list.ids;
+        let mut start = list.window_start;
+        if start > 0 && ids[start - 1] as usize >= min {
+            // The window moved backwards (the Prodigal giant-ORF exception).
+            start = ids[..start].partition_point(|&id| (id as usize) < min);
+        } else {
+            // It usually moves forward by a few sources at most.
+            let mut steps = 0;
+            while start < ids.len() && (ids[start] as usize) < min {
+                start += 1;
+                steps += 1;
+                if steps == 8 {
+                    start += ids[start..].partition_point(|&id| (id as usize) < min);
+                    break;
+                }
             }
         }
-        for window in &mut self.windows {
-            window.evict_before(&self.by_kind[window.kind], min);
-        }
+        list.window_start = start;
+        start
     }
 
     /// Forgets the sliding-window state after the window lower bound moved
@@ -388,118 +572,94 @@ impl SourceLists {
         }
     }
 
-    /// Admits the sources of the window's kind that satisfy `eligible` (a
-    /// predicate that, once false for a source, is false for every later
-    /// source) into the sliding-window maximum.
+    /// Admits the sources of the window's kind whose position satisfies
+    /// `eligible` (a predicate that, once false for a source, is false for
+    /// every later source) into the sliding-window maximum.
     #[inline]
-    fn admit(&mut self, window: usize, dp_nodes: &[DpNode], eligible: impl Fn(&DpNode) -> bool) {
+    fn admit(&mut self, window: usize, min: usize, eligible: impl Fn(usize) -> bool) {
+        let kind = self.windows[window].kind;
+        let start = self.window_start(kind, min);
+        self.windows[window].admit(&self.kinds[kind as usize], start, eligible);
+    }
+
+    /// List position of the best source in the sliding window, among the
+    /// admitted sources with node index `>= min`.
+    #[inline]
+    fn window_best(&mut self, window: usize, min: usize) -> Option<usize> {
         let window = &mut self.windows[window];
-        let list = &self.by_kind[window.kind];
-        window.admit(list, self.cursors[window.kind], dp_nodes, eligible);
+        window.best(&self.kinds[window.kind as usize], min)
     }
 
-    /// Best `(source index, total score)` in the sliding window.
+    /// The sources a window slides over.
     #[inline]
-    fn window_best(&self, window: usize) -> Option<(usize, f64)> {
-        let window = &self.windows[window];
-        window.best(&self.by_kind[window.kind])
-    }
-
-    #[inline]
-    fn window(&self, kind: NodeKind) -> &[usize] {
-        &self.by_kind[kind as usize][self.cursors[kind as usize]..]
-    }
-
-    #[inline]
-    fn window_in_frame(&self, kind: NodeKind, frame: usize) -> &[usize] {
-        &self.by_kind_and_frame[kind as usize][frame][self.frame_cursors[kind as usize][frame]..]
-    }
-}
-
-#[inline]
-fn advance_cursor(list: &[usize], cursor: &mut usize, min: usize, previous_min: usize) {
-    if min >= previous_min {
-        while *cursor < list.len() && list[*cursor] < min {
-            *cursor += 1;
-        }
-    } else {
-        *cursor = list.partition_point(|&j| j < min);
+    fn window_sources(&self, window: usize) -> &KindSources {
+        &self.kinds[self.windows[window].kind as usize]
     }
 }
 
 /// Sliding-window maximum of `source.total_score + constant` over the sources
 /// of one kind, for connection types whose score is that constant.
 ///
-/// `keys[p]` is the key of the `p`-th source of the kind. The deque holds
-/// list positions with strictly decreasing keys; a new source evicts every
-/// earlier source with a key `<=` its own, so that among equal keys the
-/// latest source wins, matching the `>=` rule of the sequential scan.
+/// The deque holds list positions with strictly decreasing keys; a new
+/// source evicts every earlier source with a key `<=` its own, so that among
+/// equal keys the latest source wins, matching the `>=` rule of the
+/// sequential scan. Sources that have left the distance window are dropped
+/// from the front when the best is asked for.
 struct ConstantWindow {
-    kind: usize,
-    keys: Vec<f64>,
-    deque: VecDeque<usize>,
+    kind: NodeKind,
+    deque: VecDeque<u32>,
     admitted: usize,
 }
 
 impl ConstantWindow {
     fn new(kind: NodeKind) -> Self {
         Self {
-            kind: kind as usize,
-            keys: Vec::new(),
+            kind,
             deque: VecDeque::new(),
             admitted: 0,
         }
     }
 
+    /// Admits the eligible sources of `list` that have not been admitted
+    /// yet, starting no earlier than list position `start`, the first source
+    /// inside the distance window.
     #[inline]
-    fn admit(
-        &mut self,
-        list: &[usize],
-        cursor: usize,
-        dp_nodes: &[DpNode],
-        eligible: impl Fn(&DpNode) -> bool,
-    ) {
-        if self.admitted < cursor {
-            self.admitted = cursor;
+    fn admit(&mut self, list: &KindSources, start: usize, eligible: impl Fn(usize) -> bool) {
+        if self.admitted < start {
+            self.admitted = start;
         }
-        while self.admitted < list.len() {
+        while self.admitted < list.ids.len() {
             let position = self.admitted;
-            if !eligible(&dp_nodes[list[position]]) {
+            if !eligible(list.positions[position]) {
                 break;
             }
             self.admitted += 1;
-            let key = self.keys[position];
+            let key = list.keys[position];
             // A NaN total can never be selected by the sequential scan.
             if key.is_nan() {
                 continue;
             }
             while let Some(&back) = self.deque.back() {
-                if self.keys[back] <= key {
+                if list.keys[back as usize] <= key {
                     self.deque.pop_back();
                 } else {
                     break;
                 }
             }
-            self.deque.push_back(position);
+            self.deque.push_back(position as u32);
         }
     }
 
     #[inline]
-    fn evict_before(&mut self, list: &[usize], min: usize) {
+    fn best(&mut self, list: &KindSources, min: usize) -> Option<usize> {
         while let Some(&front) = self.deque.front() {
-            if list[front] < min {
+            if (list.ids[front as usize] as usize) < min {
                 self.deque.pop_front();
             } else {
-                break;
+                return Some(front as usize);
             }
         }
-    }
-
-    #[inline]
-    fn best(&self, list: &[usize]) -> Option<(usize, f64)> {
-        self.deque
-            .front()
-            .map(|&position| (list[position], self.keys[position]))
+        None
     }
 }
 
@@ -561,22 +721,19 @@ fn calculate_distance_constraints(nodes: &[DpNode], i: usize) -> usize {
     min.saturating_sub(MAX_NODE_DIST)
 }
 
-fn is_terminal(node: &Node) -> bool {
-    (node.position.strand == Strand::Forward && node.position.codon_type == CodonType::Stop)
-        || (node.position.strand == Strand::Reverse && node.position.codon_type != CodonType::Stop)
+fn is_terminal(node: &DpNode) -> bool {
+    (node.strand == Strand::Forward && node.is_stop)
+        || (node.strand == Strand::Reverse && !node.is_stop)
 }
 
-fn find_maximum_terminal_node(nodes: &[Node]) -> Option<usize> {
+/// The terminal node (forward stop or reverse start) with the highest total
+/// score; the last one among equals.
+fn find_maximum_terminal_node(nodes: &[DpNode]) -> Option<usize> {
     nodes
         .iter()
         .enumerate()
         .filter(|(_, n)| is_terminal(n))
-        .max_by(|(_, a), (_, b)| {
-            a.scores
-                .total_score
-                .partial_cmp(&b.scores.total_score)
-                .unwrap()
-        })
+        .max_by(|(_, a), (_, b)| a.total_score.partial_cmp(&b.total_score).unwrap())
         .map(|(i, _)| i)
 }
 
@@ -592,7 +749,8 @@ fn setup_forward_pointers(nodes: &mut [Node], start_index: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{NodeMotifInfo, NodePosition, NodeScores, NodeState};
+    use crate::test_random::XorShift;
+    use crate::types::{CodonType, NodeMotifInfo, NodePosition, NodeScores, NodeState};
 
     fn create_test_node(
         index: usize,
@@ -629,6 +787,192 @@ mod tests {
             gc_bias_factors: [1.0; 3],
             gene_dicodon_table: Box::new([1.0; 4096]),
             total_dicodons: 0,
+        }
+    }
+
+    /// A sequence whose stretches differ in GC content: stop codons are rare
+    /// in the GC-rich ones, which gives long, overlapping open reading
+    /// frames on both strands, some of them longer than the node window.
+    fn mixed_gc_sequence(seed: u64, length: usize) -> Vec<u8> {
+        let mut random = XorShift(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut sequence = Vec::with_capacity(length);
+        while sequence.len() < length {
+            let gc_percent = [45, 60, 75, 90][(random.next() % 4) as usize];
+            let stretch = 500 + (random.next() % 6000) as usize;
+            for _ in 0..stretch.min(length - sequence.len()) {
+                let strong = random.next() % 100 < gc_percent;
+                let first = random.next().is_multiple_of(2);
+                sequence.push(match (strong, first) {
+                    (true, true) => b'G',
+                    (true, false) => b'C',
+                    (false, true) => b'A',
+                    (false, false) => b'T',
+                });
+            }
+        }
+
+        // One open reading frame per strand without a stop codon for 15 kb.
+        for codon in sequence[5_000..20_000].chunks_exact_mut(3) {
+            if matches!(&*codon, b"TAA" | b"TAG" | b"TGA") {
+                codon[0] = b'C';
+            }
+        }
+        for codon in sequence[30_000..45_000].chunks_exact_mut(3) {
+            if matches!(&*codon, b"TTA" | b"CTA" | b"TCA") {
+                codon[2] = b'G';
+            }
+        }
+        sequence
+    }
+
+    /// Sorted nodes of a mixed sequence with pseudo-random scores and the
+    /// start pointers of `record_overlapping_starts`.
+    fn scored_nodes(
+        seed: u64,
+        circular: bool,
+        training: &Training,
+        is_final_pass: bool,
+    ) -> Vec<Node> {
+        use crate::node::{add_nodes, record_overlapping_starts, sort_nodes_by_position};
+        use crate::sequence::encoded::EncodedSequence;
+
+        let encoded = EncodedSequence::without_masking(&mixed_gc_sequence(seed, 60_000));
+        let mut nodes = Vec::new();
+        add_nodes(&encoded, &mut nodes, false, circular, training).unwrap();
+        sort_nodes_by_position(&mut nodes);
+
+        let mut random = XorShift((seed ^ 0x9e37_79b9).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        for node in nodes.iter_mut() {
+            if node.position.codon_type == CodonType::Stop {
+                continue;
+            }
+            node.scores.coding_score = random.float(-30.0, 60.0);
+            node.scores.ribosome_binding_score = random.float(-6.0, 6.0);
+            node.scores.upstream_score = random.float(-3.0, 3.0);
+            node.scores.type_score = random.float(-4.0, 4.0);
+            node.scores.start_score = node.scores.ribosome_binding_score
+                + node.scores.upstream_score
+                + node.scores.type_score;
+            node.scores.gc_frame_scores = [
+                random.float(0.0, 1.5),
+                random.float(0.0, 1.5),
+                random.float(0.0, 1.5),
+            ];
+        }
+        record_overlapping_starts(&mut nodes, training, is_final_pass);
+        nodes
+    }
+
+    /// The dynamic programming as Prodigal runs it: every target looks at
+    /// every node of its window, in order, and takes a connection that is at
+    /// least as good as the best so far.
+    fn exhaustive_dynamic_programming(
+        nodes: &mut [Node],
+        training: &Training,
+        is_final_pass: bool,
+    ) {
+        use crate::algorithms::dynamic_programming::scoring::connection_types::determine_connection_type;
+
+        let mut dp_nodes = dp_nodes_with(nodes, training);
+        for target in 0..dp_nodes.len() {
+            let min = calculate_distance_constraints(&dp_nodes, target);
+            let target_scores = TargetScores::for_target(&dp_nodes, target, training);
+            for source in min..target {
+                if dp_nodes[source].has_edge_artifacts() {
+                    continue;
+                }
+                let connection_type = determine_connection_type(&nodes[source], &nodes[target]);
+                let Some(candidate) = evaluate_connection(
+                    &dp_nodes,
+                    source,
+                    target,
+                    training,
+                    is_final_pass,
+                    connection_type,
+                    &target_scores,
+                ) else {
+                    continue;
+                };
+                if candidate.total_score >= dp_nodes[target].total_score {
+                    dp_nodes[target].total_score = candidate.total_score;
+                    dp_nodes[target].traceback = source as u32;
+                    nodes[target].scores.total_score = candidate.total_score;
+                    nodes[target].state.traceback = Some(source);
+                    nodes[target].state.overlap_marker = candidate.max_frame;
+                }
+            }
+        }
+    }
+
+    fn dp_nodes_with(nodes: &[Node], training: &Training) -> Vec<DpNode> {
+        nodes
+            .iter()
+            .map(|node| DpNode::from_node(node, training))
+            .collect()
+    }
+
+    #[test]
+    fn dynamic_programming_matches_the_exhaustive_scan() {
+        let training = Training {
+            gc_bias_factors: [1.3, 0.4, 1.1],
+            ..create_test_training()
+        };
+
+        let mut workspace = DpWorkspace::default();
+        for (seed, circular) in [(1, false), (2, false), (3, true), (4, false), (5, true)] {
+            for is_final_pass in [false, true] {
+                let mut expected = scored_nodes(seed, circular, &training, is_final_pass);
+                let mut actual = expected.clone();
+                assert!(expected.len() > 2000, "too few nodes: {}", expected.len());
+
+                initialize_nodes(&mut expected);
+                exhaustive_dynamic_programming(&mut expected, &training, is_final_pass);
+                initialize_nodes(&mut actual);
+                // One workspace for every run, as the metagenomic mode keeps it.
+                compute_dynamic_programming_scores(
+                    &mut actual,
+                    &training,
+                    is_final_pass,
+                    &mut workspace,
+                );
+
+                let mut connected = 0;
+                let mut overlapping = 0;
+                let mut whole_prefix = 0;
+                let dp_nodes = dp_nodes_with(&actual, &training);
+                for (index, (expected, actual)) in expected.iter().zip(&actual).enumerate() {
+                    let context = format!(
+                        "seed {seed}, circular {circular}, final pass {is_final_pass}, node {index}"
+                    );
+                    assert_eq!(
+                        expected.scores.total_score.to_bits(),
+                        actual.scores.total_score.to_bits(),
+                        "total score, {context}"
+                    );
+                    assert_eq!(
+                        expected.state.traceback, actual.state.traceback,
+                        "traceback, {context}"
+                    );
+                    assert_eq!(
+                        expected.state.overlap_marker, actual.state.overlap_marker,
+                        "overlap marker, {context}"
+                    );
+                    connected += usize::from(actual.state.traceback.is_some());
+                    overlapping += usize::from(actual.state.overlap_marker.is_some());
+                    whole_prefix += usize::from(
+                        index > 2 * MAX_NODE_DIST
+                            && calculate_distance_constraints(&dp_nodes, index) == 0,
+                    );
+                }
+                // The comparison is only worth something if the nodes
+                // exercise the connections it is about.
+                assert!(
+                    connected > expected.len() / 2,
+                    "{connected} connected nodes"
+                );
+                assert!(overlapping > 0, "no overlapping genes");
+                assert!(whole_prefix > 0, "no node looks back to the first node");
+            }
         }
     }
 
@@ -766,7 +1110,7 @@ mod tests {
         nodes[1].scores.total_score = 5.0;
         nodes[2].scores.total_score = 10.0;
 
-        let max_idx = find_maximum_terminal_node(&nodes);
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(2)); // Should pick the highest scoring terminal
     }
 
@@ -782,7 +1126,7 @@ mod tests {
         nodes[1].scores.total_score = 8.0;
         nodes[2].scores.total_score = 12.0;
 
-        let max_idx = find_maximum_terminal_node(&nodes);
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(2)); // Should pick the highest scoring reverse start
     }
 
@@ -793,7 +1137,7 @@ mod tests {
             create_test_node(200, Strand::Reverse, CodonType::Stop, 100, false),
         ];
 
-        let max_idx = find_maximum_terminal_node(&nodes);
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert!(max_idx.is_none());
     }
 
@@ -807,7 +1151,7 @@ mod tests {
         nodes[0].scores.total_score = -5.0;
         nodes[1].scores.total_score = -10.0;
 
-        let max_idx = find_maximum_terminal_node(&nodes);
+        let max_idx = find_maximum_terminal_node(&dp_nodes_with(&nodes, &create_test_training()));
         assert_eq!(max_idx, Some(0)); // Should pick the least negative
     }
 
@@ -877,7 +1221,12 @@ mod tests {
         let mut nodes = vec![];
         let training = create_test_training();
 
-        compute_dynamic_programming_scores(&mut nodes, &training, true);
+        compute_dynamic_programming_scores(
+            &mut nodes,
+            &training,
+            true,
+            &mut DpWorkspace::default(),
+        );
     }
 
     #[test]
@@ -891,7 +1240,12 @@ mod tests {
         )];
         let training = create_test_training();
 
-        compute_dynamic_programming_scores(&mut nodes, &training, true);
+        compute_dynamic_programming_scores(
+            &mut nodes,
+            &training,
+            true,
+            &mut DpWorkspace::default(),
+        );
 
         assert_eq!(nodes[0].scores.total_score, 0.0);
         assert!(nodes[0].state.traceback.is_none());

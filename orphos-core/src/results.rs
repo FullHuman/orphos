@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::types::{Gene, Training};
 
 /// Gene finding results from Orphos analysis.
@@ -41,7 +43,12 @@ pub struct OrphosResults {
     /// Training parameters used for gene prediction.
     ///
     /// Includes statistical models for start codons, RBS motifs, and codon usage.
-    pub training_used: Training,
+    ///
+    /// A model is half a megabyte, and in metagenomic mode the sequences
+    /// share fifty preset models, so the model is shared rather than copied
+    /// into every result. Read it as a `Training`; to change it, use
+    /// [`Arc::make_mut`].
+    pub training_used: Arc<Training>,
 
     /// Information about the analyzed sequence.
     ///
@@ -63,6 +70,7 @@ pub struct OrphosResults {
 /// ```rust,no_run
 /// # use orphos_core::results::SequenceInfo;
 /// let info = SequenceInfo {
+///     number: 1,
 ///     length: 4_641_652,
 ///     gc_content: 0.5079,
 ///     num_genes: 4321,
@@ -78,6 +86,12 @@ pub struct OrphosResults {
 /// ```
 #[derive(Debug, Clone)]
 pub struct SequenceInfo {
+    /// Number of the sequence in its input, counted from 1.
+    ///
+    /// The `seqnum` of the sequence in GFF output and the first part of the
+    /// identifier of its genes. A sequence analyzed on its own is number 1.
+    pub number: usize,
+
     /// Length of the sequence in base pairs.
     pub length: usize,
 
