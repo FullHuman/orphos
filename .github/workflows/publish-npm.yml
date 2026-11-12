@@ -13,6 +13,13 @@ jobs:
   publish-npm:
     name: Publish WASM Package to npm
     runs-on: ubuntu-latest
+    # npm takes the identity of this workflow run as the credentials
+    # (trusted publishing): the package on npmjs.com names this repository
+    # and this workflow file as its trusted publisher, and no token is
+    # stored here.
+    permissions:
+      contents: read
+      id-token: write
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -20,7 +27,9 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: '20'
+        # Trusted publishing and `npm stage` need a recent npm 11, which Node 24
+        # ships.
+        node-version: '24'
         registry-url: 'https://registry.npmjs.org'
 
     - name: Install Rust
@@ -37,25 +46,28 @@ jobs:
       working-directory: orphos-wasm/pkg-node
       run: npm pack --dry-run
 
-    - name: Publish to npm (dry run)
+    - name: Show npm version
+      run: npm --version
+
+    - name: Stage the package on npm (dry run)
       if: inputs.dry_run
       working-directory: orphos-wasm/pkg-node
-      run: npm publish --dry-run
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: npm stage publish . --dry-run
 
-    - name: Publish to npm
+    # The trusted publisher may stage a version, not publish it: the version
+    # becomes public when a maintainer approves it on npmjs.com.
+    - name: Stage the package on npm
       if: '!inputs.dry_run'
       working-directory: orphos-wasm/pkg-node
-      run: npm publish --access public
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: npm stage publish . --access public
 
     - name: Create summary
       run: |
-        echo "### Published Package" >> $GITHUB_STEP_SUMMARY
+        echo "### Staged Package" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ @fullhuman/orphos (npm)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         if [ "${{ inputs.dry_run }}" = "true" ]; then
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Note:** This was a dry run. No package was actually published." >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** This was a dry run. No package was staged." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Next step:** a maintainer approves the staged version on npmjs.com (or with \`npm stage approve\`) to make it public." >> $GITHUB_STEP_SUMMARY
         fi
