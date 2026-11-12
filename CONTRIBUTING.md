@@ -182,15 +182,17 @@ Use the available dry-run or test option first:
    `test_pypi`, then run again with `test_pypi` disabled for the production
    index.
 3. **Publish to npm** — enable `dry_run`, then run again with `dry_run`
-   disabled to publish `@fullhuman/orphos`.
+   disabled to stage `@fullhuman/orphos`. The workflow stages the version
+   without making it public: approve it on npmjs.com (the package page lists
+   staged versions) or with `npm stage approve <stage-id>` to publish it.
 
 These workflows require the repository publishing credentials and trusted
 publisher configuration to already be set up. PyPI and npm both use trusted
 publishing, so neither needs a token in the repository secrets: on npmjs.com,
 the settings of `@fullhuman/orphos` name the GitHub repository
 `FullHuman/orphos` and the workflow file `publish-npm.yml` as the trusted
-publisher. Renaming that workflow file breaks npm publishing until the
-package settings are updated to match.
+publisher, allowed to run `npm stage publish`. Renaming that workflow file
+breaks npm publishing until the package settings are updated to match.
 
 ### 5. Publish and verify
 
