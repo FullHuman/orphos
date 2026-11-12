@@ -13,6 +13,13 @@ jobs:
   publish-npm:
     name: Publish WASM Package to npm
     runs-on: ubuntu-latest
+    # npm takes the identity of this workflow run as the credentials to
+    # publish (trusted publishing): the package on npmjs.com names this
+    # repository and this workflow file as its trusted publisher, and no
+    # token is stored here.
+    permissions:
+      contents: read
+      id-token: write
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -20,7 +27,8 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: '20'
+        # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
+        node-version: '24'
         registry-url: 'https://registry.npmjs.org'
 
     - name: Install Rust
@@ -37,19 +45,18 @@ jobs:
       working-directory: orphos-wasm/pkg-node
       run: npm pack --dry-run
 
+    - name: Show npm version
+      run: npm --version
+
     - name: Publish to npm (dry run)
       if: inputs.dry_run
       working-directory: orphos-wasm/pkg-node
       run: npm publish --dry-run
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     - name: Publish to npm
       if: '!inputs.dry_run'
       working-directory: orphos-wasm/pkg-node
       run: npm publish --access public
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     - name: Create summary
       run: |

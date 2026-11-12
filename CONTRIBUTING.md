@@ -185,7 +185,12 @@ Use the available dry-run or test option first:
    disabled to publish `@fullhuman/orphos`.
 
 These workflows require the repository publishing credentials and trusted
-publisher configuration to already be set up.
+publisher configuration to already be set up. PyPI and npm both use trusted
+publishing, so neither needs a token in the repository secrets: on npmjs.com,
+the settings of `@fullhuman/orphos` name the GitHub repository
+`FullHuman/orphos` and the workflow file `publish-npm.yml` as the trusted
+publisher. Renaming that workflow file breaks npm publishing until the
+package settings are updated to match.
 
 ### 5. Publish and verify
 
