@@ -617,6 +617,17 @@ footer {
     margin-bottom: 4px;
 }
 
+.footer-bottom a {
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.3s;
+}
+
+.footer-bottom a:hover {
+    color: var(--color-text-primary);
+}
+
 /* --- Animations --- */
 @keyframes fadeIn {
     from { opacity: 0; }
